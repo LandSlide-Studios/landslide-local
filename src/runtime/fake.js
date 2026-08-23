@@ -48,16 +48,18 @@ export function fakeAdapter(config = {}) {
 
 function sleep(ms, signal) {
   return new Promise((resolve, reject) => {
-    const t = setTimeout(resolve, ms);
-    signal?.addEventListener(
-      'abort',
-      () => {
-        clearTimeout(t);
-        const err = new Error('aborted');
-        err.name = 'AbortError';
-        reject(err);
-      },
-      { once: true },
-    );
+    // { once: true } fires once but does not detach on the resolve path, so one
+    // listener per chunk accumulated on the signal for the whole request.
+    const onAbort = () => {
+      clearTimeout(t);
+      const err = new Error('aborted');
+      err.name = 'AbortError';
+      reject(err);
+    };
+    const t = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
   });
 }

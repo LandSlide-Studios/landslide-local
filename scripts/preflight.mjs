@@ -31,10 +31,10 @@ else fail('zero dependencies', `found ${Object.keys(deps).join(', ')}`);
 
 /* 3. Offline: no external hosts referenced anywhere we serve or run --- */
 const EXTERNAL = /\b(?:https?:)?\/\/(?!127\.0\.0\.1|localhost\b)[a-z0-9.-]+\.[a-z]{2,}/gi;
-const ALLOWED_FILES = new Set(['fetch-models.mjs']); // the one script that may reach out
+const ALLOWED_FILES = new Set(['fetch-models.mjs', 'verify-urls.mjs']); // the only files that may reach out
 const offenders = [];
 
-for (const dir of ['public', 'src']) {
+for (const dir of ['public', 'src', 'scripts']) {
   for await (const file of walk(path.join(ROOT, dir))) {
     if (/\.(woff2|png|ico|svg|gguf)$/i.test(file)) continue;
     const text = await fs.readFile(file, 'utf8');

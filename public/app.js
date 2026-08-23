@@ -327,6 +327,22 @@ function appendInline(el, text) {
   });
 }
 
+/**
+ * Rebuilding the entire subtree from the full accumulated answer on every token
+ * is quadratic — a 4,000-token reply meant 4,000 rebuilds of a growing string.
+ * renderText only treats backticks specially, so a chunk without one can be
+ * appended to the trailing text node in constant time.
+ */
+function appendStream(el, fullText, chunk) {
+  if (chunk.includes('`')) {
+    renderText(el, fullText);
+    return;
+  }
+  const last = el.lastChild;
+  if (last && last.nodeType === Node.TEXT_NODE) last.appendData(chunk);
+  else el.append(document.createTextNode(chunk));
+}
+
 function scrollToEnd() {
   els.thread.scrollTop = els.thread.scrollHeight;
 }
@@ -335,6 +351,9 @@ function scrollToEnd() {
 
 async function send(text) {
   if (state.busy) return;
+  state.busy = true; // claim synchronously: `await newChat()` below yields, and
+  // Enter autorepeat walks straight into the gap, creating two chats and two
+  // concurrent streams that overwrite each other's abort handle and timer.
   if (!state.chatId) await newChat();
 
   const model = currentModel();
@@ -391,7 +410,7 @@ async function send(text) {
           }
         }
         answer += event.text;
-        renderText(replyText, answer);
+        appendStream(replyText, answer, event.text);
         replyText.classList.add('is-streaming');
         scrollToEnd();
       } else if (event.type === 'stats') {
@@ -423,6 +442,20 @@ async function* sseEvents(body) {
   const reader = body.getReader();
   const dec = new TextDecoder();
   let buf = '';
+  try {
+    yield* readFrames(reader, dec, buf);
+  } finally {
+    // An error thrown by the consumer (an SSE 'error' event) would otherwise
+    // leave the reader locked and the body never cancelled.
+    try {
+      await reader.cancel();
+    } catch {
+      /* already closed */
+    }
+  }
+}
+
+async function* readFrames(reader, dec, buf) {
   for (;;) {
     const { value, done } = await reader.read();
     if (done) break;
@@ -447,6 +480,8 @@ async function* sseEvents(body) {
 
 function setBusy(busy, label = 'Thinking') {
   state.busy = busy;
+  clearInterval(state.timerHandle); // never leave an orphaned interval ticking
+  state.timerHandle = null;
   els.send.disabled = busy;
   els.prompt.disabled = busy;
   els.statusBar.hidden = !busy;
@@ -460,8 +495,6 @@ function setBusy(busy, label = 'Thinking') {
       els.timer.textContent = `${((performance.now() - state.startedAt) / 1000).toFixed(1)}s`;
     }, 100);
   } else {
-    clearInterval(state.timerHandle);
-    state.timerHandle = null;
     els.prompt.focus();
   }
 }

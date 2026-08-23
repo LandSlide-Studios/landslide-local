@@ -105,13 +105,16 @@ const MODELS = Object.freeze([
   },
 ]);
 
+// Object.freeze is shallow, so a spread copy still shares the same `defaults`
+// object. One `model.defaults.temperature = x` anywhere would change what every
+// later get() returns, process-wide.
 export function all() {
-  return MODELS.map((m) => ({ ...m }));
+  return MODELS.map((m) => ({ ...m, defaults: { ...m.defaults } }));
 }
 
 export function get(id) {
   const found = MODELS.find((m) => m.id === id);
-  return found ? { ...found } : undefined;
+  return found ? { ...found, defaults: { ...found.defaults } } : undefined;
 }
 
 export function totalSizeGb() {

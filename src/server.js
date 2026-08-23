@@ -9,6 +9,8 @@
 import http from 'node:http';
 import path from 'node:path';
 import { promises as fs, createReadStream } from 'node:fs';
+import { pipeline } from 'node:stream/promises';
+import { pathToFileURL } from 'node:url';
 import { loadConfig, ROOT } from './util/config.js';
 import { createJsonFileStore } from './core/chat-store.js';
 import { createRuntime } from './runtime/index.js';
@@ -28,7 +30,9 @@ const MIME = {
 };
 
 export async function createServer(overrides = {}) {
-  const config = { ...loadConfig(), ...overrides };
+  // Shallow-merging overrides drops sibling keys: {server:{port:0}} would lose
+  // `host` and bind 0.0.0.0 on an app whose entire premise is loopback-only.
+  const config = mergeConfig(loadConfig(), overrides);
   const store = createJsonFileStore(config.storage.chatsDir);
   const runtime = createRuntime(config.runtime);
   const api = createApi({ store, runtime, config });
@@ -59,6 +63,14 @@ export async function createServer(overrides = {}) {
   });
 
   return { server, config, store, runtime };
+}
+
+function mergeConfig(base, extra) {
+  const out = { ...base };
+  for (const [k, v] of Object.entries(extra ?? {})) {
+    out[k] = v && typeof v === 'object' && !Array.isArray(v) ? mergeConfig(base[k] ?? {}, v) : v;
+  }
+  return out;
 }
 
 function isLoopback(origin) {
@@ -108,12 +120,26 @@ async function serveStatic(req, res, url) {
     res.end();
     return;
   }
-  createReadStream(target).pipe(res);
+  // .pipe() does not forward source errors, so a file vanishing or being locked
+  // mid-read (git checkout, editor save, antivirus) became an uncaughtException
+  // and killed the process. pipeline surfaces it to the caller's try/catch.
+  try {
+    await pipeline(createReadStream(target), res);
+  } catch (err) {
+    if (!res.writableEnded) res.destroy();
+    if (err?.code !== 'ERR_STREAM_PREMATURE_CLOSE') {
+      console.error(`static read failed for ${path.basename(target)}: ${err.message}`);
+    }
+  }
 }
 
 /* Entry point ----------------------------------------------------- */
 
-const isMain = process.argv[1] && import.meta.url === `file://${process.argv[1].replace(/\\/g, '/')}`;
+// On Windows a drive path becomes file://N:/... under naive string building while
+// import.meta.url is file:///N:/... — they never match, so the whole startup block
+// silently never ran and `npm start` exited 0 doing nothing. pathToFileURL is correct
+// on every platform.
+const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 
 if (isMain) {
   const { server, config } = await createServer();

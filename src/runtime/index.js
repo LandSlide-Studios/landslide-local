@@ -81,6 +81,13 @@ export function createRuntime(runtimeConfig = {}) {
 
       try {
         for await (const delta of adapter.stream({ model, messages, options, signal })) {
+          // Out-of-band reasoning is already unambiguous; re-parsing it through
+          // ThinkStream could only lose information, so it bypasses.
+          if (delta.thinking) {
+            if (firstTokenMs === null) firstTokenMs = Date.now() - started;
+            tokens += 1;
+            push([{ type: 'think', text: delta.thinking }]);
+          }
           if (delta.text) {
             if (firstTokenMs === null) firstTokenMs = Date.now() - started;
             tokens += 1;

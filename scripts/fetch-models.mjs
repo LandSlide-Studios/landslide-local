@@ -16,7 +16,7 @@
 import { promises as fs, createWriteStream } from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { Readable } from 'node:stream';
+import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import * as catalog from '../src/core/model-catalog.js';
 import { loadConfig } from '../src/util/config.js';
@@ -39,9 +39,9 @@ if (selected.length === 0) {
 
 console.log(`\n  Target folder : ${MODELS_DIR}`);
 console.log(`  Models        : ${selected.length}`);
-console.log(`  Download size : ${selected.reduce((s, m) => s + m.sizeGb, 0).toFixed(2)} GB\n`);
+console.log(`  Download size : ${selected.reduce((s, m) => s + m.sizeGb, 0).toFixed(2)} GiB\n`);
 for (const m of selected) {
-  console.log(`   ${m.id.padEnd(22)} ${String(m.sizeGb).padStart(5)} GB  ${m.quant}`);
+  console.log(`   ${m.id.padEnd(22)} ${String(m.sizeGb).padStart(5)} GiB  ${m.quant}`);
 }
 console.log('');
 
@@ -75,8 +75,14 @@ async function download(model) {
 
   const done = await sizeOf(target);
   if (done > 0) {
-    console.log(`  = ${model.id}: already present (${gb(done)} GB)`);
-    return target;
+    // "non-zero" is not "complete": a truncated GGUF loads as a corrupt model.
+    const expected = model.sizeGb * 1024 ** 3;
+    if (Math.abs(done - expected) / expected < 0.02) {
+      console.log(`  = ${model.id}: already present (${gb(done)} GiB)`);
+      return target;
+    }
+    console.log(`  ! ${model.id}: on disk at ${gb(done)} GiB, expected ~${model.sizeGb} GiB — refetching`);
+    await fs.rename(target, part).catch(() => fs.rm(target, { force: true }));
   }
 
   let from = await sizeOf(part);
@@ -100,23 +106,24 @@ async function download(model) {
   let seen = from;
   let lastPrint = 0;
 
-  const monitored = new ReadableStream({
-    async start(controller) {
-      for await (const chunk of res.body) {
-        seen += chunk.length;
-        const now = Date.now();
-        if (now - lastPrint > 700) {
-          lastPrint = now;
-          const pct = total ? ((seen / total) * 100).toFixed(1) : '?';
-          process.stdout.write(`\r  > ${model.id}: ${gb(seen)} / ${gb(total)} GB (${pct}%)   `);
-        }
-        controller.enqueue(chunk);
+  // A Transform keeps backpressure intact. Enqueuing from a ReadableStream's
+  // start() ignores desiredSize entirely, so a slow sink would buffer the whole
+  // download in memory - on a file that can be over 7GB.
+  const progress = new Transform({
+    transform(chunk, _enc, cb) {
+      seen += chunk.length;
+      const now = Date.now();
+      if (now - lastPrint > 700) {
+        lastPrint = now;
+        const pct = total ? ((seen / total) * 100).toFixed(1) : '?';
+        process.stdout.write(`
+  > ${model.id}: ${gb(seen)} / ${gb(total)} GiB (${pct}%)   `);
       }
-      controller.close();
+      cb(null, chunk);
     },
   });
 
-  await pipeline(Readable.fromWeb(monitored), out);
+  await pipeline(Readable.fromWeb(res.body), progress, out);
   process.stdout.write('\r' + ' '.repeat(70) + '\r');
 
   const finalSize = await sizeOf(part);
@@ -124,7 +131,7 @@ async function download(model) {
     throw new Error(`size mismatch: got ${finalSize}, expected ${total}. Re-run to resume.`);
   }
   await fs.rename(part, target);
-  console.log(`  + ${model.id}: downloaded ${gb(finalSize)} GB`);
+  console.log(`  + ${model.id}: downloaded ${gb(finalSize)} GiB`);
   return target;
 }
 
@@ -150,7 +157,8 @@ async function register(model, file) {
 
 function run(cmd, argv) {
   return new Promise((resolve) => {
-    const child = spawn(cmd, argv, { stdio: 'inherit', shell: process.platform === 'win32' });
+    const exe = process.platform === 'win32' ? `${cmd}.exe` : cmd;
+    const child = spawn(exe, argv, { stdio: 'inherit', shell: false });
     child.on('error', () => resolve(-1));
     child.on('close', (code) => resolve(code ?? -1));
   });
@@ -164,4 +172,9 @@ async function sizeOf(p) {
   }
 }
 
-const gb = (bytes) => (bytes / 1024 ** 3).toFixed(2);
+// Declared as a function, not a const arrow: the top-level await above runs
+// before the tail of this module is evaluated, so a const here is still in
+// the temporal dead zone when the first chunk arrives.
+function gb(bytes) {
+  return (bytes / 1024 ** 3).toFixed(2);
+}

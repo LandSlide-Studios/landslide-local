@@ -20,6 +20,31 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 
+/**
+ * Per-key promise chain. Two requests appending to the same chat would otherwise
+ * interleave read-modify-write and silently drop a message, or collide on the
+ * temp file and leave a half-written JSON that then gets quarantined — losing the
+ * conversation. Serialising per chat id costs nothing for a single user.
+ */
+function createSerializer() {
+  const chains = new Map();
+  return function withLock(key, fn) {
+    const prev = chains.get(key) ?? Promise.resolve();
+    const run = prev.then(fn);
+    const settled = run.then(
+      () => {},
+      () => {},
+    );
+    chains.set(key, settled);
+    settled.then(() => {
+      if (chains.get(key) === settled) chains.delete(key);
+    });
+    return run;
+  };
+}
+
+let tmpCounter = 0;
+
 const ID_RE = /^[A-Za-z0-9_-]{6,64}$/;
 
 export function newId() {
@@ -28,7 +53,9 @@ export function newId() {
 
 function assertId(id) {
   if (typeof id !== 'string' || !ID_RE.test(id)) {
-    throw new Error(`invalid chat id: ${String(id).slice(0, 40)}`);
+    const err = new Error(`invalid chat id: ${String(id).slice(0, 40)}`);
+    err.code = 'EINVALID_ID';
+    throw err;
   }
 }
 
@@ -119,6 +146,25 @@ function applyPatch(chat, patch) {
   return next;
 }
 
+/** A record we can operate on without throwing later. */
+function isWellFormed(chat) {
+  return (
+    chat &&
+    typeof chat === 'object' &&
+    typeof chat.id === 'string' &&
+    typeof chat.title === 'string' &&
+    Array.isArray(chat.messages) &&
+    chat.messages.every((m) => m && typeof m.content === 'string' && typeof m.role === 'string')
+  );
+}
+
+/** Callers (and the HTTP layer) need to tell "missing" from "broken". */
+export function notFound(id) {
+  const err = new Error(`chat not found: ${id}`);
+  err.code = 'ENOTFOUND_CHAT';
+  return err;
+}
+
 function matches(chat, needle) {
   if (chat.title.toLowerCase().includes(needle)) return true;
   return chat.messages.some((m) => m.content.toLowerCase().includes(needle));
@@ -134,6 +180,7 @@ const byNewest = (a, b) =>
 
 export function createJsonFileStore(dir) {
   const fileFor = (id) => path.join(dir, `${id}.json`);
+  const withLock = createSerializer();
   let ready = null;
 
   async function ensureDir() {
@@ -144,8 +191,14 @@ export function createJsonFileStore(dir) {
   async function writeAtomic(chat) {
     await ensureDir();
     const target = fileFor(chat.id);
-    const tmp = `${target}.${process.pid}.tmp`;
-    await fs.writeFile(tmp, JSON.stringify(chat, null, 2), 'utf8');
+    const tmp = `${target}.${process.pid}.${tmpCounter++}.tmp`;
+    const handle = await fs.open(tmp, 'w');
+    try {
+      await handle.writeFile(JSON.stringify(chat, null, 2), 'utf8');
+      await handle.sync(); // rename is only atomic if the bytes are actually down
+    } finally {
+      await handle.close();
+    }
     await fs.rename(tmp, target);
     return chat;
   }
@@ -154,7 +207,10 @@ export function createJsonFileStore(dir) {
     try {
       const raw = await fs.readFile(fileFor(id), 'utf8');
       const parsed = JSON.parse(raw);
-      if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.messages)) return null;
+      if (!isWellFormed(parsed)) {
+        await quarantine(id);
+        return null;
+      }
       return parsed;
     } catch (err) {
       if (err.code === 'ENOENT') return null;
@@ -201,15 +257,20 @@ export function createJsonFileStore(dir) {
     },
     async appendMessage(id, message) {
       assertId(id);
-      const chat = await readOne(id);
-      if (!chat) throw new Error(`chat not found: ${id}`);
-      return writeAtomic(applyAppend(chat, message));
+      normaliseMessage(message); // reject bad input before taking the lock
+      return withLock(id, async () => {
+        const chat = await readOne(id);
+        if (!chat) throw notFound(id);
+        return writeAtomic(applyAppend(chat, message));
+      });
     },
     async updateChat(id, patch = {}) {
       assertId(id);
-      const chat = await readOne(id);
-      if (!chat) throw new Error(`chat not found: ${id}`);
-      return writeAtomic(applyPatch(chat, patch));
+      return withLock(id, async () => {
+        const chat = await readOne(id);
+        if (!chat) throw notFound(id);
+        return writeAtomic(applyPatch(chat, patch));
+      });
     },
     async remove(id) {
       assertId(id);
@@ -253,8 +314,9 @@ export function createMemoryStore() {
     },
     async appendMessage(id, message) {
       assertId(id);
+      normaliseMessage(message);
       const chat = chats.get(id);
-      if (!chat) throw new Error(`chat not found: ${id}`);
+      if (!chat) throw notFound(id);
       const next = applyAppend(chat, message);
       chats.set(id, next);
       return structuredClone(next);
@@ -262,7 +324,7 @@ export function createMemoryStore() {
     async updateChat(id, patch = {}) {
       assertId(id);
       const chat = chats.get(id);
-      if (!chat) throw new Error(`chat not found: ${id}`);
+      if (!chat) throw notFound(id);
       const next = applyPatch(chat, patch);
       chats.set(id, next);
       return structuredClone(next);

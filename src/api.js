@@ -83,7 +83,13 @@ export function createApi({ store, runtime, config }) {
 
     const sse = openSse(res);
     const controller = new AbortController();
-    req.on('close', () => controller.abort());
+    // NOT req.on('close'): readJson has already consumed the request by this
+    // point, so that event fired before the listener was attached and Stop never
+    // reached the model — it kept generating with nobody listening. The response
+    // stream is what stays open for the life of the generation.
+    res.on('close', () => {
+      if (!res.writableEnded) controller.abort();
+    });
 
     sse({ type: 'start', chatId, model: model.id, title: chat.title });
 
@@ -149,7 +155,7 @@ export function createApi({ store, runtime, config }) {
       const result = await route[2](match, body, url, res, req);
       if (result !== null) send(res, 200, result);
     } catch (err) {
-      const status = err.status ?? 500;
+      const status = err.status ?? statusForCode(err.code);
       if (!res.headersSent) send(res, status, { error: String(err.message ?? err) });
       else res.end();
     }
@@ -158,6 +164,13 @@ export function createApi({ store, runtime, config }) {
 }
 
 /* ---------------------------------------------------------------- */
+
+/** A client mistake is not a server fault; report it as one of theirs. */
+function statusForCode(code) {
+  if (code === 'ENOTFOUND_CHAT') return 404;
+  if (code === 'EINVALID_ID') return 400;
+  return 500;
+}
 
 function send(res, status, payload) {
   const body = JSON.stringify(payload);

@@ -1,0 +1,28 @@
+
+  Target folder : N:\models
+  Models        : 5
+  Download size : 21.23 GB
+
+   cold-fusion-9b          5.23 GB  IQ3_M
+   heretic-instruct-9b     4.97 GB  i1-Q4_K_S
+   glm-flash-21b           7.32 GB  i1-IQ2_M
+   deckard-4b              2.52 GB  i1-Q4_K_M
+   auto-variable-2b        1.19 GB  i1-Q4_K_M
+
+file:///N:/landslide-local/scripts/fetch-models.mjs:114
+  > ${model.id}: ${gb(seen)} / ${gb(total)} GiB (${pct}%)   `);
+                   ^
+
+ReferenceError: Cannot access 'gb' before initialization
+    at Transform.transform [as _transform] (file:///N:/landslide-local/scripts/fetch-models.mjs:114:20)
+    at Transform._write (node:internal/streams/transform:171:8)
+    at writeOrBuffer (node:internal/streams/writable:572:12)
+    at _write (node:internal/streams/writable:501:10)
+    at Writable.write (node:internal/streams/writable:510:10)
+    at Readable.ondata (node:internal/streams/readable:1009:22)
+    at Readable.emit (node:events:519:28)
+    at addChunk (node:internal/streams/readable:561:12)
+    at readableAddChunkPushByteMode (node:internal/streams/readable:512:3)
+    at Readable.push (node:internal/streams/readable:392:5)
+
+Node.js v22.19.0

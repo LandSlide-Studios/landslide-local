@@ -65,10 +65,12 @@ export function llamaCppAdapter(config = {}) {
 
         const out = {};
         const delta = frame.choices?.[0]?.delta ?? {};
-        // Some builds stream reasoning on a separate field; fold it back into
-        // the text stream wrapped in tags so ThinkStream sees one consistent shape.
-        if (delta.reasoning_content) out.text = `<think>${delta.reasoning_content}</think>`;
-        else if (delta.content) out.text = delta.content;
+        // Reasoning arrives out of band on some builds. Pass it through as a
+        // typed field rather than re-wrapping it in literal <think> tags: one
+        // frame can carry BOTH fields (the old else-if dropped the answer), and
+        // reasoning containing the string "</think>" would corrupt the split.
+        if (delta.reasoning_content) out.thinking = delta.reasoning_content;
+        if (delta.content) out.text = delta.content;
 
         if (frame.usage) {
           if (Number.isFinite(frame.usage.prompt_tokens)) out.promptTokens = frame.usage.prompt_tokens;
@@ -76,7 +78,7 @@ export function llamaCppAdapter(config = {}) {
             out.completionTokens = frame.usage.completion_tokens;
           }
         }
-        if (out.text || out.promptTokens || out.completionTokens) yield out;
+        if (out.text || out.thinking || out.promptTokens || out.completionTokens) yield out;
       }
     },
   };
