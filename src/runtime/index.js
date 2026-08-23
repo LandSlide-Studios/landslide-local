@@ -69,6 +69,7 @@ export function createRuntime(runtimeConfig = {}) {
       let thinking = '';
       let tokens = 0;
       let promptTokens = 0;
+      let evalMs = null;
       let aborted = false;
 
       const push = (events) => {
@@ -95,6 +96,7 @@ export function createRuntime(runtimeConfig = {}) {
           }
           if (delta.promptTokens) promptTokens = delta.promptTokens;
           if (delta.completionTokens) tokens = delta.completionTokens;
+          if (delta.evalMs) evalMs = delta.evalMs;
         }
       } catch (err) {
         if (isAbort(err, signal)) aborted = true;
@@ -104,13 +106,16 @@ export function createRuntime(runtimeConfig = {}) {
       push(think.end());
 
       const totalMs = Date.now() - started;
-      const genMs = firstTokenMs === null ? totalMs : Math.max(1, totalMs - firstTokenMs);
+      // Prefer the server's generation clock. Ours measures the window between
+      // the first delta we saw and the last, which understates the work when a
+      // long reasoning pass is buffered and overstates throughput wildly.
+      const genMs = evalMs ?? (firstTokenMs === null ? totalMs : Math.max(1, totalMs - firstTokenMs));
       const stats = {
         firstTokenMs,
         totalMs,
         tokens,
         promptTokens,
-        tokensPerSecond: tokens > 0 ? Number(((tokens / genMs) * 1000).toFixed(1)) : 0,
+        tokensPerSecond: tokens > 0 && genMs > 0 ? Number(((tokens / genMs) * 1000).toFixed(1)) : 0,
       };
       onEvent({ type: 'stats', stats });
 

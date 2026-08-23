@@ -343,8 +343,24 @@ function appendStream(el, fullText, chunk) {
   else el.append(document.createTextNode(chunk));
 }
 
+let thinkScrollQueued = false;
+function scheduleThinkScroll(el) {
+  if (thinkScrollQueued) return;
+  thinkScrollQueued = true;
+  requestAnimationFrame(() => {
+    thinkScrollQueued = false;
+    el.scrollTop = el.scrollHeight;
+  });
+}
+
+let endScrollQueued = false;
 function scrollToEnd() {
-  els.thread.scrollTop = els.thread.scrollHeight;
+  if (endScrollQueued) return;
+  endScrollQueued = true;
+  requestAnimationFrame(() => {
+    endScrollQueued = false;
+    els.thread.scrollTop = els.thread.scrollHeight;
+  });
 }
 
 /* ---------------- sending ---------------- */
@@ -397,8 +413,12 @@ async function send(text) {
         reasoning += event.text;
         think.hidden = false;
         if (!sawAnswer) think.open = true; // watch it reason, then get out of the way
-        thinkText.textContent = reasoning;
-        thinkText.scrollTop = thinkText.scrollHeight;
+        // Append, never re-assign: a real model emits thousands of reasoning
+        // tokens, and replacing textContent each time is quadratic. Reading
+        // scrollHeight here forced a synchronous reflow per token on top of it,
+        // which was enough to lock the renderer on a long reasoning pass.
+        appendStream(thinkText, reasoning, event.text);
+        scheduleThinkScroll(thinkText);
         els.statusLabel.textContent = 'Thinking';
       } else if (event.type === 'answer') {
         if (!sawAnswer) {

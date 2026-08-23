@@ -50,17 +50,26 @@ runs the whole app against a scripted fake model.
 
 All five are uncensored (Heretic-processed). Sizes are the real GGUF download.
 
-| Model | Size | Fit on 8 GB | What it is for |
-|---|---|---|---|
-| **Cold Fusion GAIN** 9B | 5.23 GiB | fits | Best all-rounder; sharpest at tables, code and structure |
-| **Heretic Instruct** 9B | 4.97 GiB | fits | No reasoning block — answers immediately. The daily driver |
-| **GLM-Flash Heretic** 21B | 7.32 GiB | spills | Smartest here, and much slower; some layers run on the CPU |
-| **Deckard** 4B | 2.52 GiB | fits | Fast and characterful — fiction, voice, roleplay |
-| **Auto-Variable** 2B | 1.19 GiB | fits | Near-instant, for quick rewrites and drafting |
+Speeds below are **measured on this machine** (RTX 5060 8 GB, warm model), not estimated.
+
+| Model | Size | Fit | Measured | What it is for |
+|---|---|---|---|---|
+| **Heretic Instruct** 9B | 4.97 GiB | fits | **73 tok/s**, 0.3s to first token | No reasoning block — answers immediately. The daily driver |
+| **Cold Fusion GAIN** 9B | 5.23 GiB | fits | **66 tok/s** | Best all-rounder; sharpest at tables, code and structure |
+| **Deckard** 4B | 2.52 GiB | fits | **107 tok/s** | Fast and characterful — fiction, voice, roleplay |
+| **Auto-Variable** 2B | 1.19 GiB | fits | **125 tok/s** | Near-instant, for quick rewrites and drafting |
+| **GLM-Flash Heretic** 21B | 7.32 GiB | spills | **8.9 tok/s** | Smartest here — and it took 3m15s to answer one short question |
+
+The 21B is the honest disappointment: it does not fit in 8 GB, so part of it runs on
+DDR4-2133 system RAM. One sentence cost 195 seconds. Keep it for something you are
+willing to walk away from.
+
+A reasoning model's wall-clock is dominated by how long it thinks, not by tok/s — the
+4B spent 2,869 tokens reasoning about a single sentence. The Instruct model skips that
+entirely, which is why it feels several times faster than its 73 tok/s suggests.
 
 Sizes are GiB, the same unit VRAM is measured in (Hugging Face shows decimal GB, which
-reads about 7% larger). "spills" means part of the model runs on system RAM, which on DDR4-2133 is a large
-slowdown, not a small one.
+reads about 7% larger).
 
 ---
 

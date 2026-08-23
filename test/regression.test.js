@@ -336,6 +336,34 @@ test('ollama: streams NDJSON, separates thinking, reports token counts', async (
   await stub.close();
 });
 
+test('ollama: reasoning streamed in message.thinking is not discarded', async () => {
+  // Ollama 0.32+ emits reasoning out of band. Reading only message.content threw
+  // away every reasoning token, so the whole reasoning panel was dead.
+  const stub = await stubServer((req, res) => {
+    if (req.url === '/api/version') return res.writeHead(200).end('{}');
+    res.writeHead(200, { 'content-type': 'application/x-ndjson' });
+    const frames = [
+      { message: { role: 'assistant', content: '', thinking: 'Six times ' } },
+      { message: { role: 'assistant', content: '', thinking: 'seven.' } },
+      { message: { role: 'assistant', content: '42.' } },
+      { done: true, prompt_eval_count: 22, eval_count: 200, eval_duration: 3_040_000_000 },
+    ];
+    res.end(frames.map((f) => JSON.stringify(f) + '\n').join(''));
+  });
+
+  const rt = createRuntime({ adapter: 'ollama', ollamaUrl: stub.url });
+  const out = await rt.chat({ model: 'm', messages: [{ role: 'user', content: 'x' }] });
+  assert.equal(out.thinking, 'Six times seven.');
+  assert.equal(out.answer, '42.');
+  assert.equal(out.stats.tokens, 200);
+  // 200 tokens over the server's reported 3.04s, not over our observed window.
+  assert.ok(
+    Math.abs(out.stats.tokensPerSecond - 65.8) < 1,
+    `throughput should come from eval_duration, got ${out.stats.tokensPerSecond}`,
+  );
+  await stub.close();
+});
+
 test('ollama: an error frame mid-stream surfaces as an error', async () => {
   const stub = await stubServer((req, res) => {
     if (req.url === '/api/version') return res.writeHead(200).end('{}');

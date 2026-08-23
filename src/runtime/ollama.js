@@ -57,14 +57,24 @@ export function ollamaAdapter(config = {}) {
         }
         if (frame.error) throw new Error(`ollama: ${frame.error}`);
 
-        const text = frame.message?.content ?? '';
         const out = {};
+        // Ollama 0.32+ streams reasoning out of band in message.thinking rather
+        // than as <think> tags inside content. Reading only content silently
+        // discarded every reasoning token.
+        const thinking = frame.message?.thinking ?? '';
+        const text = frame.message?.content ?? '';
+        if (thinking) out.thinking = thinking;
         if (text) out.text = text;
         if (frame.done) {
           if (Number.isFinite(frame.prompt_eval_count)) out.promptTokens = frame.prompt_eval_count;
           if (Number.isFinite(frame.eval_count)) out.completionTokens = frame.eval_count;
+          // The server's own generation clock is authoritative; ours cannot see
+          // time spent before the first token is flushed.
+          if (Number.isFinite(frame.eval_duration)) out.evalMs = frame.eval_duration / 1e6;
         }
-        if (out.text || out.promptTokens || out.completionTokens) yield out;
+        if (out.text || out.thinking || out.promptTokens || out.completionTokens || out.evalMs) {
+          yield out;
+        }
         if (frame.done) return;
       }
     },

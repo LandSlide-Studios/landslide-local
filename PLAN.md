@@ -41,15 +41,22 @@ Status legend: `done` · `todo` · `blocked`
 | T-18 | Launchers, README, CLAUDE.md | done | [x] double-click starts it |
 | T-19 | Adversarial review by a separate agent | done | [x] findings triaged; real ones fixed |
 
-## Phase 5 — Live run (needs Tommy)
+## Phase 5 — Live run (done)
 
-| # | Item | Status | Blocking on |
+| # | Item | Status | Done when |
 |---|---|---|---|
-| T-20 | Update Ollama past 0.7.0 | blocked | Tommy — `winget upgrade --id Ollama.Ollama` |
-| T-21 | Download the 5 GGUFs (~22.8 GB) | blocked | T-20, and ~30 min of bandwidth |
-| T-22 | Measure real tokens/sec per model and correct the README | blocked | T-21 |
+| T-20 | Update Ollama past 0.7.0 | done | [x] 0.7.0 -> 0.32.15 |
+| T-21 | Download and register the 5 GGUFs | done | [x] 5/5 in the registry |
+| T-22 | Measure real tokens/sec and correct the README | done | [x] all five measured, estimates removed |
+| T-23 | Move the Ollama store to N: and delete raw GGUFs | done | [x] 60 GB moved, 21.2 GiB reclaimed, generation proven first |
 
-Everything up to T-19 is verified. T-20 onward cannot be done for him: the Ollama
-update is a machine change and the download is his bandwidth. The speed figures in
-the earlier analysis are calculated from memory bandwidth, **not measured** — T-22 is
-what turns them into facts.
+## Phase 6 — Found only by running it for real
+
+| # | Item | Status | Note |
+|---|---|---|---|
+| T-24 | Ollama 0.32 streams reasoning in `message.thinking` | done | [x] adapter read only `content`, so every reasoning token was dropped |
+| T-25 | Throughput used our stream window, not the server's eval clock | done | [x] reported 420 tok/s where the truth was 66 |
+| T-26 | Reasoning panel re-rendered and reflowed per token | done | [x] locked the renderer on a 2,869-token reasoning pass |
+
+None of these were reachable with the fake adapter — its scripts are 200 characters
+long and carry `<think>` tags inline. Only a real model on real hardware exposed them.
