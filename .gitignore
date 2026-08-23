@@ -4,3 +4,4 @@ logs/
 *.gguf
 .DS_Store
 .demo-chats/
+.download.log
