@@ -60,3 +60,79 @@ Status legend: `done` · `todo` · `blocked`
 
 None of these were reachable with the fake adapter — its scripts are 200 characters
 long and carry `<think>` tags inline. Only a real model on real hardware exposed them.
+
+---
+
+# Phase 8 — Seven-category hardening (build-loop)
+
+Approved scope: categories 1-7 of the improvement roadmap. Nothing outside this
+table gets built; anything discovered along the way is noted for Tommy, not
+absorbed.
+
+## The loop protocol (anti-bias)
+
+The weakness in a plain build-review loop is that the reviewer inherits the
+builder's framing. Every mechanism below exists to break that.
+
+**1. Acceptance criteria are written before the build.**
+Each item gets an executable suite at `test/acceptance/<item>.test.js`, authored
+by the planner, not the builder. The builder is told the criteria and is
+**forbidden to edit any file under `test/acceptance/`**.
+
+**2. The acceptance suite is checksummed.**
+`scripts/acceptance-lock.mjs` records a SHA-256 per acceptance file before the
+build and re-checks after. **A changed checksum is an automatic FAIL for that
+round**, regardless of test results. This is the mechanism that stops a builder
+from tuning the target to fit the shot.
+
+**3. The verifier is air-gapped.**
+The verifying subagent receives ONLY: the repo path, and the acceptance criteria
+for its category, written as a black-box spec. It does **not** receive the diff,
+the builder's report, the branch name, the round number, or any statement that
+the work is finished. It is instructed to assume the feature is broken and to
+find the failure, and to write its own probes rather than only running ours.
+
+**4. One verifier per category.**
+Seven independent verifications, each ignorant of the others.
+
+**5. Verdict is machine-checked, not narrated.**
+An item closes only when: acceptance suite green, checksum intact, full `node --test`
+green, `preflight` 0 FAIL, and `verify-live` green. A verifier's prose opinion
+cannot close an item, and cannot by itself keep one open if every gate passes -
+it is recorded as a finding for the next round instead.
+
+**6. Three rounds, then blocked.**
+A fourth round means the item was underspecified. Mark `blocked` with the reason
+and move on rather than grinding.
+
+## Gates (every item, every round)
+
+```
+node scripts/acceptance-lock.mjs --verify   # checksums intact
+node --test                                 # whole suite incl. acceptance
+node scripts/preflight.mjs                  # 0 FAIL
+node scripts/verify-live.mjs                # reaches a real model
+```
+
+## Branching
+
+No git remote exists, so "open a PR" is not available. Equivalent gate: each item
+builds on `loop/<slug>` and merges into `loop/integration`. **`master` is not
+touched.** Tommy's approval to merge `loop/integration` into `master` is the
+second approval the loop is designed to stop at.
+
+## Queue
+
+| # | Item | Status | Branch | Done when |
+|---|------|--------|--------|-----------|
+| I0 | Second-review findings: C1 raw-GGUF deleted by name not identity (data loss), I2 poll lies about which adapter is live, I3 preload keep_alive/num_ctx mismatch so it does not actually help, I4 streamed code blocks render outside the code box, I5 `runtimeModelTag`/`options` bypass the catalog, M6 failed newChat wedges the composer, M7 preload failure shows nothing, M8 switching chats mid-stream eats the reply, M9 spawn errors swallowed, L10-L14, plus the false README/CLAUDE claims | todo | - | acceptance/i0 green: cleanup cannot delete a file whose size disagrees with the registry entry; the adapter shown is the adapter configured; a warmed model serves the next message without reloading; a stream ending inside a fence renders identically to a reload; no request-supplied string reaches the runtime as a model id |
+| I8 | Per-model output formatting: render markdown (headings, lists, bold, tables, blockquotes) not just fenced code, with a per-model profile so a prose model and a table-heavy model each render the way they actually write | todo | - | acceptance/i8 green: markdown tables, lists, headings and emphasis render as elements not literal asterisks; each catalog model declares a format profile; model output is still never inserted as HTML |
+| I1 | Quality of life: context meter + auto-trim, system prompt panel, regenerate/edit/branch, parameter controls, rename in UI, markdown export, unload-model, prompt library, model-list keyboard nav, auto-preload on select | todo | - | acceptance/i1 green: a chat exceeding num_ctx never silently drops turns; a system prompt set in the UI reaches the model; regenerate replaces the last reply; every listed control is reachable by keyboard |
+| I2 | Architecture: catalog becomes data (`models.json`), split `api.js`, split `public/app.js` into ES modules, one shared event-schema module used by both sides, single explicit reasoning path | todo | - | acceptance/i2 green: adding a model requires no source edit; no file over 400 lines in `src/` or `public/`; front and back import the same event constants; `node --test` still green |
+| I3 | MCP: server exposing local models to Claude (`ask_local_model`, `list_local_models`, `search_chats`) over stdio, zero dependencies | todo | - | acceptance/i3 green: the server speaks MCP initialize/tools-list/tools-call over stdio and returns a real completion from a local model; refuses unknown model ids |
+| I4 | Security & privacy: at-rest encryption for chats (opt-in, node:crypto), loopback auth token, app lock | todo | - | acceptance/i4 green: with encryption on, no plaintext message body appears in any file on disk; a request without the token is refused; existing plaintext chats migrate without loss |
+| I5 | Performance: auto-preload selected model, `num_batch` tuning, search index, documented llama.cpp/MTP path | todo | - | acceptance/i5 green: search over 500 synthetic chats completes under 200ms; selecting a model preloads it; no regression in measured tok/s |
+| I6 | Reliability & ops: start-on-login, rotating log file, chat backup/restore, server auto-restart | todo | - | acceptance/i6 green: logs are written and rotate at a size cap; backup produces a restorable archive and restore round-trips byte-identical; install/uninstall of the login entry is reversible |
+| I7 | Testing gaps: headless browser-level UI test, long-stream soak test, verify-live exercises the thinking path on a slow model | todo | - | acceptance/i7 green: a UI test drives a real conversation and asserts DOM state without a human; a 20k-character reasoning stream renders without the main thread blocking over 100ms |
+
+Status: `todo` · `building` · `review` · `done` · `blocked`
