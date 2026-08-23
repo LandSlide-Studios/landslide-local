@@ -1,0 +1,6 @@
+{
+  "server": { "host": "127.0.0.1", "port": 4390 },
+  "runtime": { "adapter": "ollama", "ollamaUrl": "http://127.0.0.1:11434", "llamaCppUrl": "http://127.0.0.1:8080" },
+  "storage": { "chatsDir": "N:\landslide-local\chats", "modelsDir": "N:\models" },
+  "hardware": { "vramTotalGb": 8, "vramUsableGb": 6.65, "label": "RTX 5060 8GB" }
+}

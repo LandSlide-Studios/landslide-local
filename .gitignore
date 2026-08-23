@@ -1,0 +1,5 @@
+node_modules/
+chats/
+logs/
+*.gguf
+.DS_Store

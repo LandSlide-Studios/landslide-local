@@ -1,0 +1,16 @@
+{
+  "name": "landslide-local",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Offline local chat client for uncensored Qwen 3.5 models",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test",
+    "preflight": "node scripts/preflight.mjs",
+    "fetch-models": "node scripts/fetch-models.mjs"
+  }
+}
