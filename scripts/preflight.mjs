@@ -78,28 +78,28 @@ try {
   fail('config', err.message);
 }
 
-/* 6. Which models are actually on disk ------------------------------- */
+/* 6. Which models are actually available ---------------------------- */
 if (config) {
-  const dir = config.storage.modelsDir;
-  let present = [];
-  try {
-    present = await fs.readdir(dir);
-  } catch {
-    warn('models folder', `${dir} does not exist yet — run: npm run fetch-models`);
+  // The raw GGUF is deleted once Ollama has its own copy, so the registry -
+  // not the models folder - is the source of truth for "do I have this".
+  const registered = await ollamaTags(config);
+  const missing = [];
+  let rawBytes = 0;
+  for (const m of catalog.all()) {
+    const rawSize = await sizeOf(path.join(config.storage.modelsDir, m.file));
+    rawBytes += rawSize;
+    const have = registered.has(m.id) || registered.has(`${m.id}:latest`) || rawSize > 0;
+    if (!have) missing.push(m.id);
   }
-  if (present.length || (await exists(dir))) {
-    const missing = [];
-    let bytes = 0;
-    for (const m of catalog.all()) {
-      const p = path.join(dir, m.file);
-      const size = await sizeOf(p);
-      if (size > 0) bytes += size;
-      else missing.push(m.id);
-    }
-    const have = catalog.all().length - missing.length;
-    const detail = `${have}/${catalog.all().length} present (${(bytes / 1024 ** 3).toFixed(2)} GB)`;
-    if (missing.length === 0) pass('models on disk', detail);
-    else warn('models on disk', `${detail}; missing: ${missing.join(', ')}`);
+  const have = catalog.all().length - missing.length;
+  const detail =
+    `${have}/${catalog.all().length} available` +
+    (rawBytes > 0 ? `; ${(rawBytes / 1024 ** 3).toFixed(2)} GiB of raw GGUF still on disk` : '');
+  if (missing.length === 0) pass('models available', detail);
+  else warn('models available', `${detail || `${have}/${catalog.all().length} available`}; missing: ${missing.join(', ')}`);
+
+  if (rawBytes > 1024 ** 3 && have === catalog.all().length) {
+    warn('raw GGUF duplicates', `run: node scripts/fetch-models.mjs --cleanup-raw`);
   }
 
   /* 7. Every shipped model is uncensored ---------------------------- */
@@ -153,6 +153,20 @@ async function* walk(dir) {
     const full = path.join(dir, e.name);
     if (e.isDirectory()) yield* walk(full);
     else if (!ALLOWED_FILES.has(e.name)) yield full;
+  }
+}
+
+async function ollamaTags(config) {
+  if (config.runtime.adapter === 'llamacpp') return new Set();
+  try {
+    const res = await fetch(`${config.runtime.ollamaUrl}/api/tags`, {
+      signal: AbortSignal.timeout(4000),
+    });
+    if (!res.ok) return new Set();
+    const body = await res.json();
+    return new Set((body.models ?? []).map((m) => m.name));
+  } catch {
+    return new Set();
   }
 }
 

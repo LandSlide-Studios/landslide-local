@@ -11,6 +11,12 @@
  *   node scripts/fetch-models.mjs deckard-4b   just one
  *   node scripts/fetch-models.mjs --list       show plan and exit
  *   node scripts/fetch-models.mjs --no-register   download only
+ *   node scripts/fetch-models.mjs --keep-raw      keep the .gguf after registering
+ *   node scripts/fetch-models.mjs --cleanup-raw   delete raw .gguf already registered
+ *
+ * `ollama create` copies the GGUF into Ollama's own blob store, so keeping the
+ * raw file doubles the disk cost. The raw file is deleted once registration is
+ * confirmed against the live registry - never before, and never if it failed.
  */
 
 import { promises as fs, createWriteStream } from 'node:fs';
@@ -27,6 +33,7 @@ const wanted = args.filter((a) => !a.startsWith('--'));
 
 const config = loadConfig();
 const MODELS_DIR = config.storage.modelsDir;
+const OLLAMA_URL = (config.runtime.ollamaUrl ?? 'http://127.0.0.1:11434').replace(/[/]+$/, '');
 
 const selected = catalog
   .all()
@@ -50,10 +57,22 @@ if (flags.has('--list')) process.exit(0);
 await fs.mkdir(MODELS_DIR, { recursive: true });
 
 let failures = 0;
+
+if (flags.has('--cleanup-raw')) {
+  for (const model of selected) {
+    await dropRaw(model, path.join(MODELS_DIR, model.file));
+  }
+  console.log('');
+  process.exit(0);
+}
+
 for (const model of selected) {
   try {
     const file = await download(model);
-    if (!flags.has('--no-register')) await register(model, file);
+    if (!flags.has('--no-register')) {
+      const registered = await register(model, file);
+      if (registered && !flags.has('--keep-raw')) await dropRaw(model, file);
+    }
   } catch (err) {
     failures += 1;
     console.error(`\n  FAILED ${model.id}: ${err.message}\n`);
@@ -151,8 +170,39 @@ async function register(model, file) {
   await fs.writeFile(mfPath, modelfile, 'utf8');
 
   const code = await run('ollama', ['create', model.id, '-f', mfPath]);
-  if (code === 0) console.log(`  * ${model.id}: registered with Ollama`);
-  else console.log(`  ! ${model.id}: 'ollama create' exited ${code} — see the Modelfile at ${mfPath}`);
+  if (code === 0) {
+    console.log(`  * ${model.id}: registered with Ollama`);
+    return true;
+  }
+  console.log(`  ! ${model.id}: 'ollama create' exited ${code} - Modelfile kept at ${mfPath}`);
+  return false;
+}
+
+/**
+ * Remove the raw GGUF once Ollama holds its own copy. Confirms registration
+ * against the live registry first: deleting the only copy of a 7GB file on the
+ * strength of an exit code alone is not a trade worth making.
+ */
+async function dropRaw(model, file) {
+  const size = await sizeOf(file);
+  if (size === 0) return;
+  if (!(await isRegistered(model.id))) {
+    console.log(`  ~ ${model.id}: not in the Ollama registry, keeping the raw file`);
+    return;
+  }
+  await fs.rm(file, { force: true });
+  console.log(`  - ${model.id}: raw GGUF removed, reclaimed ${gb(size)} GiB`);
+}
+
+async function isRegistered(id) {
+  try {
+    const res = await fetch(`${OLLAMA_URL}/api/tags`, { signal: AbortSignal.timeout(5000) });
+    if (!res.ok) return false;
+    const body = await res.json();
+    return (body.models ?? []).some((m) => m.name === id || m.name === `${id}:latest`);
+  } catch {
+    return false;
+  }
 }
 
 function run(cmd, argv) {
