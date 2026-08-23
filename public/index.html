@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="referrer" content="no-referrer" />
+<title>Landslide Local</title>
+<link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+
+<div class="shell">
+
+  <aside class="sidebar" id="sidebar">
+    <header class="brand">
+      <div class="brand-mark">LS</div>
+      <div class="brand-text">
+        <h1>Landslide</h1>
+        <p id="runtimeState" class="runtime-state">checking runtime...</p>
+      </div>
+    </header>
+
+    <section class="panel">
+      <h2 class="panel-title">Model</h2>
+      <div id="modelList" class="model-list" role="radiogroup" aria-label="Choose a model"></div>
+    </section>
+
+    <section class="panel panel-grow">
+      <div class="panel-head">
+        <h2 class="panel-title">Chats</h2>
+        <button id="newChat" class="btn btn-accent btn-sm" type="button">+ New</button>
+      </div>
+      <input id="chatSearch" class="search" type="search" placeholder="Search chats" aria-label="Search chats" />
+      <div id="chatList" class="chat-list" role="list"></div>
+    </section>
+
+    <footer class="side-foot">
+      <span id="storageHint">chats on disk</span>
+    </footer>
+  </aside>
+
+  <main class="main">
+    <div id="thread" class="thread" aria-live="polite">
+      <div class="empty" id="emptyState">
+        <div class="empty-card">
+          <h2>Offline. Uncensored. Yours.</h2>
+          <p>Pick a model on the left and start typing. Nothing leaves this machine.</p>
+          <ul id="emptyFacts" class="empty-facts"></ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="composer-wrap">
+      <div id="statusBar" class="status-bar" hidden>
+        <span class="status-dot" aria-hidden="true"></span>
+        <span id="statusLabel">Thinking</span>
+        <span class="timer" id="timer">0.0s</span>
+        <span id="statusMeta" class="status-meta"></span>
+        <button id="stopBtn" class="btn btn-sm btn-stop" type="button">Stop</button>
+      </div>
+
+      <form id="composer" class="composer">
+        <textarea id="prompt" class="prompt" rows="1" placeholder="Ask anything. Enter to send, Shift+Enter for a new line." aria-label="Message"></textarea>
+        <div class="composer-foot">
+          <div class="composer-hints">
+            <kbd>Enter</kbd> send
+            <kbd>Shift</kbd>+<kbd>Enter</kbd> newline
+            <kbd>Ctrl</kbd>+<kbd>K</kbd> search
+            <span id="charCount" class="char-count"></span>
+          </div>
+          <button id="send" class="btn btn-accent" type="submit">Send</button>
+        </div>
+      </form>
+    </div>
+  </main>
+
+</div>
+
+<template id="tpl-message">
+  <article class="msg">
+    <div class="msg-role"></div>
+    <div class="msg-body">
+      <details class="think" hidden>
+        <summary><span class="think-label">Reasoning</span><span class="think-time"></span></summary>
+        <div class="think-text"></div>
+      </details>
+      <div class="msg-text"></div>
+      <div class="msg-stats"></div>
+    </div>
+  </article>
+</template>
+
+<script src="/app.js" type="module"></script>
+</body>
+</html>

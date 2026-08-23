@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "landslide-local-demo",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["scripts/demo.mjs"],
+      "port": 4390
+    }
+  ]
+}

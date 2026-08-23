@@ -3,3 +3,4 @@ chats/
 logs/
 *.gguf
 .DS_Store
+.demo-chats/
