@@ -102,10 +102,13 @@ if (config) {
     warn('raw GGUF duplicates', `run: node scripts/fetch-models.mjs --cleanup-raw`);
   }
 
-  /* 7. Every shipped model is uncensored ---------------------------- */
+  /* 7. Catalog flag check - NOT a behavioural claim ------------------ */
+  // This only confirms nobody added a model marked censored. It cannot tell you
+  // whether a model actually refuses; that is measured by check-uncensored.mjs,
+  // which asks the models. Do not let this line stand in for that one.
   const censored = catalog.all().filter((m) => !m.uncensored);
-  if (censored.length === 0) pass('all models uncensored', `${catalog.all().length} models`);
-  else fail('all models uncensored', `censored: ${censored.map((m) => m.id).join(', ')}`);
+  if (censored.length === 0) pass('catalog flagged uncensored', `${catalog.all().length} models (behaviour: check-uncensored.mjs)`);
+  else fail('catalog flagged uncensored', `censored: ${censored.map((m) => m.id).join(', ')}`);
 
   /* 8. Is a model server reachable ---------------------------------- */
   const url =
