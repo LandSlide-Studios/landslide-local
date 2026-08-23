@@ -8,7 +8,9 @@
  *   fitFor(model, vramGb)  -> { verdict, headroomGb, note }
  *   withAvailability(list) -> Model[]  (marks .installed from runtime tags)
  *
- * Sizes and filenames are verified against the Hugging Face repos, not guessed.
+ * Sizes and filenames are verified against the Hugging Face repos with a HEAD request
+ * (scripts/verify-urls.mjs), not guessed. Sizes are GiB, matching how VRAM is measured;
+ * Hugging Face displays decimal GB, so its numbers read about 7% larger.
  * `runtimeCost` is the KV cache + compute buffer reserve at the default context.
  */
 
@@ -22,9 +24,9 @@ const MODELS = Object.freeze([
     params: '9B',
     tagline: 'Best all-rounder. Sharpest at tables, code and structure.',
     repo: 'DavidAU/Qwen3.5-9B-Cold-Fusion-GAIN-v1.0-Uncensored-Heretic-NEO-MAX-Imatrix-GGUF',
-    file: 'Qwen3.5-9B-Cold-Fusion-GAIN-v1.0-Uncensored-Heretic-NEO-MAX-Imatrix-IQ3_M.gguf',
+    file: 'Qwen3.5-9B-C-Fusion-GAIN-UnHeretic-NM-DAU-NEO-MAX-NEO-IQ3_M.gguf',
     quant: 'IQ3_M',
-    sizeGb: 5.62,
+    sizeGb: 5.23,
     thinks: true,
     uncensored: true,
     accent: 'ember',
@@ -41,7 +43,7 @@ const MODELS = Object.freeze([
     repo: 'mradermacher/Qwen3.5-9B-Claude-4.6-OS-HERETIC-UNCENSORED-INSTRUCT-i1-GGUF',
     file: 'Qwen3.5-9B-Claude-4.6-OS-HERETIC-UNCENSORED-INSTRUCT.i1-Q4_K_S.gguf',
     quant: 'i1-Q4_K_S',
-    sizeGb: 5.34,
+    sizeGb: 4.97,
     thinks: false,
     uncensored: true,
     accent: 'ember',
@@ -58,7 +60,7 @@ const MODELS = Object.freeze([
     repo: 'mradermacher/Qwen3.5-21B-GLM-4.7-Flash-Heretic-Uncensored-Thinking-i1-GGUF',
     file: 'Qwen3.5-21B-GLM-4.7-Flash-Heretic-Uncensored-Thinking.i1-IQ2_M.gguf',
     quant: 'i1-IQ2_M',
-    sizeGb: 7.86,
+    sizeGb: 7.32,
     thinks: true,
     uncensored: true,
     accent: 'slate',
@@ -75,7 +77,7 @@ const MODELS = Object.freeze([
     repo: 'mradermacher/Qwen3.5-4B-Deckard-HERETIC-UNCENSORED-Thinking-i1-GGUF',
     file: 'Qwen3.5-4B-Deckard-HERETIC-UNCENSORED-Thinking.i1-Q4_K_M.gguf',
     quant: 'i1-Q4_K_M',
-    sizeGb: 2.71,
+    sizeGb: 2.52,
     thinks: true,
     uncensored: true,
     accent: 'moss',
@@ -92,7 +94,7 @@ const MODELS = Object.freeze([
     repo: 'mradermacher/Qwen3.5-2B-Claude-4.6-OS-Auto-Variable-HERETIC-UNCENSORED-THINKING-i1-GGUF',
     file: 'Qwen3.5-2B-Claude-4.6-OS-Auto-Variable-HERETIC-UNCENSORED-THINKING.i1-Q4_K_M.gguf',
     quant: 'i1-Q4_K_M',
-    sizeGb: 1.27,
+    sizeGb: 1.19,
     thinks: true,
     uncensored: true,
     accent: 'moss',

@@ -25,7 +25,7 @@ setx OLLAMA_FLASH_ATTENTION 1
 setx OLLAMA_KV_CACHE_TYPE q8_0
 ```
 
-**3. Download the models** (~22.8 GB, one time, resumable).
+**3. Download the models** (~21.2 GiB / 22.8 GB, one time, resumable).
 
 ```
 node scripts/fetch-models.mjs
@@ -52,14 +52,14 @@ All five are uncensored (Heretic-processed). Sizes are the real GGUF download.
 
 | Model | Size | Fit on 8 GB | What it is for |
 |---|---|---|---|
-| **Cold Fusion GAIN** 9B | 5.62 GB | tight | Best all-rounder; sharpest at tables, code and structure |
-| **Heretic Instruct** 9B | 5.34 GB | tight | No reasoning block — answers immediately. The daily driver |
-| **GLM-Flash Heretic** 21B | 7.86 GB | spills | Smartest here, and much slower; some layers run on the CPU |
-| **Deckard** 4B | 2.71 GB | fits | Fast and characterful — fiction, voice, roleplay |
-| **Auto-Variable** 2B | 1.27 GB | fits | Near-instant, for quick rewrites and drafting |
+| **Cold Fusion GAIN** 9B | 5.23 GiB | fits | Best all-rounder; sharpest at tables, code and structure |
+| **Heretic Instruct** 9B | 4.97 GiB | fits | No reasoning block — answers immediately. The daily driver |
+| **GLM-Flash Heretic** 21B | 7.32 GiB | spills | Smartest here, and much slower; some layers run on the CPU |
+| **Deckard** 4B | 2.52 GiB | fits | Fast and characterful — fiction, voice, roleplay |
+| **Auto-Variable** 2B | 1.19 GiB | fits | Near-instant, for quick rewrites and drafting |
 
-"tight" means it fits with under 0.5 GB spare — close other GPU applications first.
-"spills" means part of the model runs on system RAM, which on DDR4-2133 is a large
+Sizes are GiB, the same unit VRAM is measured in (Hugging Face shows decimal GB, which
+reads about 7% larger). "spills" means part of the model runs on system RAM, which on DDR4-2133 is a large
 slowdown, not a small one.
 
 ---

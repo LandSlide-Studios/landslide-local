@@ -51,10 +51,10 @@ test('GET /api/state reports runtime, hardware and per-model fit', async () => {
   assert.equal(status, 200);
   assert.equal(body.runtime.ok, true);
   assert.equal(body.models.length, 5);
-  assert.equal(body.totalSizeGb, 22.8);
+  assert.equal(body.totalSizeGb, 21.23);
 
   const nine = body.models.find((m) => m.id === 'cold-fusion-9b');
-  assert.equal(nine.fit.verdict, 'tight', '9B leaves under 0.5GB spare — say so rather than promising a clean fit');
+  assert.equal(nine.fit.verdict, 'fits');
   const four = body.models.find((m) => m.id === 'deckard-4b');
   assert.equal(four.fit.verdict, 'fits');
   const twentyOne = body.models.find((m) => m.id === 'glm-flash-21b');
