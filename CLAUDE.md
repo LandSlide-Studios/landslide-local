@@ -41,6 +41,12 @@ them is hypothetical.
 - `ThinkStream` (`src/core/think-stream.js`) — pure. Holds back any suffix that could
   still become a tag, so tags split across chunks work. Do not "simplify" the holdback.
 - `src/api.js` is deliberately thin. Logic accumulating there is a smell; push it down.
+- `RuntimeSupervisor` (`src/core/runtime-supervisor.js`) starts Ollama with the env
+  from `config.json` rather than an inherited one. That is deliberate and load-bearing:
+  a stale environment block is why a model store on another drive goes unseen. The
+  executable path comes from config or a known install location, **never from a
+  request**, and the only value the HTTP layer forwards is a model id already in the
+  catalog.
 
 ## Conventions
 
@@ -54,9 +60,15 @@ them is hypothetical.
 ## Before calling anything done
 
 ```
-node --test              # must be all green
+node --test                  # must be all green
 node scripts/preflight.mjs   # must be 0 FAIL
+node scripts/verify-live.mjs # must reach a real model
 ```
+
+The first two never touch a model. Three real bugs shipped past them because the
+fake adapter emits 200-character scripts with inline `<think>` tags, and Ollama does
+neither. **A change to the runtime layer is not verified until `verify-live.mjs`
+passes.**
 
 Then open it in a browser and actually look at it. Neither command can see a font that
 did not load or a panel that renders on top of the composer.

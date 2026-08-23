@@ -14,11 +14,16 @@
  */
 
 import * as catalog from './core/model-catalog.js';
+import { createRuntimeSupervisor } from './core/runtime-supervisor.js';
 
 const JSON_HEADERS = { 'content-type': 'application/json; charset=utf-8' };
 
-export function createApi({ store, runtime, config }) {
+export function createApi({ store, runtime, config, supervisor }) {
+  const boss = supervisor ?? createRuntimeSupervisor(config.runtime ?? {});
   const routes = [
+    ['GET', /^\/api\/runtime$/, runtimeStatus],
+    ['POST', /^\/api\/runtime\/start$/, startRuntime],
+    ['POST', /^\/api\/runtime\/warm$/, warmModel],
     ['GET', /^\/api\/state$/, getState],
     ['GET', /^\/api\/chats$/, listChats],
     ['POST', /^\/api\/chats$/, createChat],
@@ -27,6 +32,23 @@ export function createApi({ store, runtime, config }) {
     ['DELETE', /^\/api\/chats\/([\w-]+)$/, deleteChat],
     ['POST', /^\/api\/chats\/([\w-]+)\/message$/, postMessage],
   ];
+
+  async function runtimeStatus() {
+    return { runtime: await boss.status() };
+  }
+
+  async function startRuntime() {
+    const result = await boss.start();
+    return { result, runtime: await boss.status() };
+  }
+
+  async function warmModel(_m, body) {
+    // Only a model this app ships may be preloaded; the id never reaches the
+    // runtime unvalidated.
+    const model = catalog.get(body?.modelId);
+    if (!model) throw httpError(400, `unknown model: ${body?.modelId}`);
+    return { result: await boss.warm(model.id) };
+  }
 
   async function getState() {
     const [health, installed] = await Promise.all([runtime.health(), runtime.listModels()]);
@@ -37,6 +59,7 @@ export function createApi({ store, runtime, config }) {
     return {
       ok: true,
       runtime: health,
+      supervisor: await boss.status(),
       hardware: config.hardware,
       modelsDir: config.storage.modelsDir,
       chatsDir: config.storage.chatsDir,

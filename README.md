@@ -73,6 +73,24 @@ reads about 7% larger).
 
 ---
 
+## Starting the models
+
+You do not need to start Ollama yourself. If it is not running, the sidebar says so
+and gives you a **Start Ollama** button - one click, and the app waits until the
+server actually answers before clearing the warning.
+
+This is more reliable than launching Ollama from the Start Menu, because the app
+passes the environment from `config.json` (`runtime.ollamaEnv`) when it starts it.
+That is what guarantees the model store on N: is found. A Start Menu launch inherits
+whatever environment Explorer happens to be holding, which is how `ollama list` came
+back empty after the store moved.
+
+**Preload** on each model card loads it into VRAM ahead of time. Loading a 9B off the
+SSD costs about 20 seconds, and without preloading you pay that on your first message.
+A model already resident shows **in VRAM** instead. Models stay loaded for 30 minutes.
+
+---
+
 ## Using it
 
 | | |
@@ -107,9 +125,19 @@ gone. Nothing is written anywhere else.
 ## Checking it still works
 
 ```
-npm test          # 58 tests
+npm test          # 79 tests, no model needed
 npm run preflight # environment, fonts, models, and the offline check
 ```
+
+Neither of those touches a model. To prove the whole path really works - Ollama up,
+store readable, a real model generating, and the reply saved - double-click
+`verify.cmd` or run:
+
+```
+node scripts/verify-live.mjs
+```
+
+That is the one to run after a reboot.
 
 Preflight's `offline` check greps every served and runtime file for an external host.
 If it passes, the app genuinely has no network dependency.

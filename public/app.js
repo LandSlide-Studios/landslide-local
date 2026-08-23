@@ -30,6 +30,9 @@ const els = {
   timer: $('timer'),
   stopBtn: $('stopBtn'),
   storageHint: $('storageHint'),
+  runtimeBar: $('runtimeBar'),
+  runtimeMsg: $('runtimeMsg'),
+  startRuntime: $('startRuntime'),
   tpl: $('tpl-message'),
 };
 
@@ -39,6 +42,8 @@ const state = {
   modelId: localStorage.getItem('ls.modelId') || null,
   chatId: null,
   busy: false,
+  loaded: [],
+  runtimeUp: false,
   abort: null,
   timerHandle: null,
   startedAt: 0,
@@ -64,25 +69,104 @@ async function loadState() {
     state.modelId = state.models[0].id;
   }
 
+  state.runtimeUp = data.runtime.ok;
+  state.loaded = data.supervisor?.loaded ?? [];
   renderRuntime(data);
   renderModels();
   renderFacts(data);
+  state.hardwareLabel = data.hardware.label;
   els.storageHint.textContent = data.chatsDir;
   els.storageHint.title = data.chatsDir;
 }
 
 function renderRuntime(data) {
   const r = data.runtime;
+  const sup = data.supervisor ?? {};
+  state.runtimeUp = r.ok;
+  state.loaded = sup.loaded ?? [];
+
   els.runtimeState.textContent = r.ok
     ? `${r.adapter} ready · ${data.hardware.label}`
-    : `${r.adapter} offline`;
+    : `${r.adapter} not running`;
   els.runtimeState.className = `runtime-state ${r.ok ? 'is-ok' : 'is-bad'}`;
-  els.runtimeState.title = r.ok ? (r.url ?? '') : r.error ?? '';
+  els.runtimeState.title = r.ok ? (sup.version ? `v${sup.version}` : '') : (r.error ?? '');
+
+  if (r.ok) {
+    els.runtimeBar.hidden = true;
+  } else {
+    els.runtimeBar.hidden = false;
+    els.runtimeBar.classList.remove('is-working');
+    els.runtimeMsg.textContent = sup.canStart
+      ? 'The model server is not running. Nothing will answer until it is.'
+      : 'Ollama is not running and its executable was not found. Set runtime.ollamaBin in config.json.';
+    els.startRuntime.hidden = !sup.canStart;
+    els.startRuntime.disabled = false;
+    els.startRuntime.textContent = 'Start Ollama';
+  }
+}
+
+const isResident = (id) => state.loaded.some((m) => m.name === id || m.name === `${id}:latest`);
+
+async function refreshRuntime() {
+  try {
+    const { runtime } = await (await fetch('/api/runtime')).json();
+    const wasUp = state.runtimeUp;
+    state.runtimeUp = runtime.running;
+    state.loaded = runtime.loaded ?? [];
+    renderRuntime({
+      runtime: { ok: runtime.running, adapter: 'ollama', error: 'not reachable' },
+      supervisor: runtime,
+      hardware: { label: state.hardwareLabel ?? '' },
+    });
+    renderModels();
+    if (!wasUp && runtime.running) await loadChats(els.chatSearch.value);
+  } catch {
+    /* a failed poll is not worth surfacing */
+  }
+}
+
+async function startRuntime() {
+  els.startRuntime.disabled = true;
+  els.startRuntime.textContent = 'Starting';
+  els.runtimeBar.classList.add('is-working');
+  els.runtimeMsg.textContent = 'Launching Ollama and waiting for it to answer...';
+
+  try {
+    const { result } = await (await fetch('/api/runtime/start', { method: 'POST' })).json();
+    if (result.ok) {
+      els.runtimeMsg.textContent = `Ollama ${result.version} is up.`;
+      await refreshRuntime();
+    } else {
+      els.runtimeBar.classList.remove('is-working');
+      els.runtimeMsg.textContent = result.error ?? 'Could not start Ollama.';
+      els.startRuntime.disabled = false;
+      els.startRuntime.textContent = 'Try again';
+    }
+  } catch (err) {
+    els.runtimeBar.classList.remove('is-working');
+    els.runtimeMsg.textContent = String(err.message ?? err);
+    els.startRuntime.disabled = false;
+    els.startRuntime.textContent = 'Try again';
+  }
+}
+
+async function warmModel(id, button) {
+  button.disabled = true;
+  button.textContent = 'Loading';
+  const { result } = await (
+    await fetch('/api/runtime/warm', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ modelId: id }),
+    })
+  ).json();
+  button.textContent = result.ok ? 'Ready' : 'Failed';
+  await refreshRuntime();
 }
 
 function renderFacts(data) {
   const rows = [
-    ['Models bundled', `${data.models.length} · ${data.totalSizeGb} GB`],
+    ['Models bundled', `${data.models.length} · ${data.totalSizeGb} GiB`],
     ['Model folder', data.modelsDir],
     ['Chats saved to', data.chatsDir],
     ['Network', 'none — everything is local'],
@@ -136,6 +220,27 @@ function renderModels() {
       const mode = document.createElement('span');
       mode.textContent = m.thinks ? 'reasons' : 'instant';
       meta.append(fit, size, mode);
+
+      // Loading a 9B off disk costs about 20 seconds. Show whether it is already
+      // resident, and offer to put it there before the first message rather than
+      // during it.
+      if (isResident(m.id)) {
+        const res = document.createElement('span');
+        res.className = 'model-resident';
+        res.textContent = 'in VRAM';
+        meta.append(res);
+      } else if (state.runtimeUp) {
+        const warm = document.createElement('button');
+        warm.type = 'button';
+        warm.className = 'model-warm';
+        warm.textContent = 'Preload';
+        warm.title = `Load ${m.name} into VRAM now so the first message is instant`;
+        warm.addEventListener('click', (e) => {
+          e.stopPropagation();
+          warmModel(m.id, warm);
+        });
+        meta.append(warm);
+      }
 
       btn.append(top, tag, meta);
       btn.addEventListener('click', () => selectModel(m.id));
@@ -554,6 +659,11 @@ function wireEvents() {
     e.preventDefault();
     els.prompt.focus();
   });
+
+  els.startRuntime.addEventListener('click', () => startRuntime());
+  setInterval(() => {
+    if (!state.busy) refreshRuntime();
+  }, 12000);
 
   els.stopBtn.addEventListener('click', () => state.abort?.abort());
   els.newChat.addEventListener('click', () => newChat());

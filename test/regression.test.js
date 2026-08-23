@@ -389,3 +389,96 @@ test('mutating a model copy cannot affect the next lookup', async () => {
   first.defaults.temperature = 99;
   assert.equal(catalog.get('deckard-4b').defaults.temperature, original);
 });
+
+/* ================================================================== */
+/* RuntimeSupervisor — the one-click start path                        */
+/* ================================================================== */
+
+test('supervisor reports a live runtime and its resident models', async () => {
+  const { createRuntimeSupervisor } = await import('../src/core/runtime-supervisor.js');
+  const stub = await stubServer((req, res) => {
+    if (req.url === '/api/version') return res.writeHead(200).end(JSON.stringify({ version: '9.9.9' }));
+    if (req.url === '/api/ps') {
+      return res
+        .writeHead(200)
+        .end(JSON.stringify({ models: [{ name: 'deckard-4b:latest', size: 2.7e9, expires_at: 'later' }] }));
+    }
+    res.writeHead(404).end();
+  });
+
+  const boss = createRuntimeSupervisor({ ollamaUrl: stub.url });
+  const s = await boss.status();
+  assert.equal(s.running, true);
+  assert.equal(s.version, '9.9.9');
+  assert.equal(s.loaded[0].name, 'deckard-4b:latest');
+  await stub.close();
+});
+
+test('supervisor reports a dead runtime without throwing', async () => {
+  const { createRuntimeSupervisor } = await import('../src/core/runtime-supervisor.js');
+  const boss = createRuntimeSupervisor({ ollamaUrl: 'http://127.0.0.1:1' });
+  const s = await boss.status();
+  assert.equal(s.running, false);
+  assert.deepEqual(s.loaded, []);
+});
+
+test('start fails cleanly when the executable cannot be found', async () => {
+  const { createRuntimeSupervisor } = await import('../src/core/runtime-supervisor.js');
+  const boss = createRuntimeSupervisor({
+    ollamaUrl: 'http://127.0.0.1:1',
+    ollamaBin: path.join(os.tmpdir(), 'definitely-not-ollama-xyz.exe'),
+  });
+  const r = await boss.start();
+  assert.equal(r.ok, false);
+  assert.match(r.error, /Could not find the Ollama executable/);
+});
+
+test('start is a no-op when the runtime already answers', async () => {
+  const { createRuntimeSupervisor } = await import('../src/core/runtime-supervisor.js');
+  const stub = await stubServer((req, res) => {
+    if (req.url === '/api/version') return res.writeHead(200).end(JSON.stringify({ version: '1.2.3' }));
+    res.writeHead(200).end('{}');
+  });
+  const boss = createRuntimeSupervisor({ ollamaUrl: stub.url });
+  const r = await boss.start();
+  assert.equal(r.ok, true);
+  assert.equal(r.alreadyRunning, true);
+  assert.equal(r.tookMs, 0);
+  await stub.close();
+});
+
+test('warm preloads through the runtime and reports how long it took', async () => {
+  const { createRuntimeSupervisor } = await import('../src/core/runtime-supervisor.js');
+  let seen = null;
+  const stub = await stubServer((req, res) => {
+    if (req.url === '/api/generate') {
+      let body = '';
+      req.on('data', (c) => (body += c));
+      req.on('end', () => {
+        seen = JSON.parse(body);
+        res.writeHead(200).end(JSON.stringify({ done: true, done_reason: 'load' }));
+      });
+      return;
+    }
+    res.writeHead(200).end('{}');
+  });
+  const boss = createRuntimeSupervisor({ ollamaUrl: stub.url });
+  const r = await boss.warm('deckard-4b');
+  assert.equal(r.ok, true);
+  assert.equal(seen.model, 'deckard-4b');
+  assert.equal(seen.prompt, '', 'an empty prompt is what makes this a load rather than a generation');
+  assert.equal(seen.keep_alive, '30m');
+  await stub.close();
+});
+
+test('the warm endpoint refuses a model that is not in the catalog', async () => {
+  const h = await apiHarness();
+  const res = await fetch(`${h.base}/api/runtime/warm`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ modelId: '../../etc/passwd' }),
+  });
+  assert.equal(res.status, 400);
+  assert.match((await res.json()).error, /unknown model/);
+  await h.close();
+});

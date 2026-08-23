@@ -122,6 +122,43 @@ button, input, textarea { font-family: inherit; font-size: inherit; color: inher
   color: rgba(237, 233, 225, 0.60);
 }
 
+.runtime-bar {
+  display: flex; align-items: center; gap: 9px;
+  padding: 8px 10px;
+  background: rgba(196, 65, 26, 0.16);
+  border: 2px solid var(--accent);
+  border-radius: var(--r);
+}
+.runtime-bar.is-working { background: rgba(237, 233, 225, 0.08); border-color: rgba(237, 233, 225, 0.35); }
+.runtime-msg { flex: 1; font-size: 11.5px; line-height: 1.35; color: var(--cream); }
+.runtime-bar .btn { flex: none; }
+
+.model-resident {
+  margin-left: auto;
+  padding: 1px 5px;
+  border: 1.5px solid currentColor;
+  border-radius: var(--r);
+  font-weight: 500;
+  color: #8FBF9F;
+}
+.model.is-active .model-resident { color: var(--cream); }
+
+.model-warm {
+  margin-left: auto;
+  font-family: var(--font-display);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  padding: 1px 7px;
+  background: transparent;
+  color: inherit;
+  border: 1.5px solid currentColor;
+  border-radius: var(--r);
+  cursor: pointer;
+  opacity: 0.75;
+}
+.model-warm:hover { opacity: 1; background: rgba(237, 233, 225, 0.16); }
+.model-warm:disabled { opacity: 0.4; cursor: wait; }
+
 /* ---------- model cards ---------- */
 
 .model-list { display: flex; flex-direction: column; gap: 7px; }
