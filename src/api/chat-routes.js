@@ -5,6 +5,7 @@
  *   POST   /api/chats                  create
  *   GET    /api/chats/:id              read
  *   PATCH  /api/chats/:id              rename / model / system prompt / options
+ *   POST   /api/chats/:id/branch       fork the chat at one message
  *   DELETE /api/chats/:id              delete
  *   GET    /api/chats/:id/export       the conversation as a file
  *   POST   /api/chats/:id/message      send + stream the reply over SSE
@@ -71,6 +72,23 @@ export function createChatRoutes({ store, runtime }) {
     return { chat: await store.updateChat(match[1], patch) };
   }
 
+  /**
+   * Fork a chat at one message.
+   *
+   * A copy rather than a pointer: two branches that share storage are two
+   * conversations one edit away from corrupting each other, and the whole value
+   * of this is being able to take the other road without risking the first one.
+   * The source is not touched at all.
+   */
+  async function branchChat(match, body) {
+    const messageId = body?.messageId;
+    if (typeof messageId !== 'string' || !messageId) {
+      throw httpError(400, 'messageId is required');
+    }
+    const title = typeof body?.title === 'string' ? body.title : undefined;
+    return { chat: await store.branch(match[1], messageId, { title }) };
+  }
+
   async function deleteChat(match) {
     return { removed: await store.remove(match[1]) };
   }
@@ -103,7 +121,10 @@ export function createChatRoutes({ store, runtime }) {
     let chat = await store.appendMessage(chatId, { role: 'user', content: text });
     if (chat.modelId !== model.id) chat = await store.updateChat(chatId, { modelId: model.id });
 
-    return streamReply({ chatId, chat, model, body, res });
+    // The page drew this turn optimistically and has no id for it. Without one
+    // the freshly-sent question is the single message in the thread that cannot
+    // be branched from until the chat is reopened.
+    return streamReply({ chatId, chat, model, body, res, userMessageId: chat.messages.at(-1).id });
   }
 
   /**
@@ -136,7 +157,7 @@ export function createChatRoutes({ store, runtime }) {
    * budget, the system prompt, the options whitelist — cannot differ between
    * sending and regenerating.
    */
-  async function streamReply({ chatId, chat, model, body, res }) {
+  async function streamReply({ chatId, chat, model, body, res, userMessageId = null }) {
     const sse = openSse(res);
     const controller = new AbortController();
     // NOT req.on('close'): readJson has already consumed the request by this
@@ -164,6 +185,8 @@ export function createChatRoutes({ store, runtime }) {
       chatId,
       model: model.id,
       title: chat.title,
+      // null on a regenerate: that door adds no user turn.
+      userMessageId,
       // The whole point of the budget: what fits, what the window is, and how
       // many turns did not make it — sent before a token is generated, so a
       // truncated conversation is something the user is TOLD about rather than
@@ -220,6 +243,7 @@ export function createChatRoutes({ store, runtime }) {
     ['POST', /^\/api\/chats$/, createChat],
     ['GET', /^\/api\/chats\/([\w-]+)$/, getChat],
     ['PATCH', /^\/api\/chats\/([\w-]+)$/, patchChat],
+    ['POST', /^\/api\/chats\/([\w-]+)\/branch$/, branchChat],
     ['DELETE', /^\/api\/chats\/([\w-]+)$/, deleteChat],
     ['GET', /^\/api\/chats\/([\w-]+)\/export$/, getExport],
     ['POST', /^\/api\/chats\/([\w-]+)\/message$/, postMessage],

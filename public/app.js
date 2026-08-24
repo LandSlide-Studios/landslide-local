@@ -27,7 +27,7 @@
  */
 
 import { apiFetch } from './api-client.js';
-import { newChat, regenerateReply, startNewChat } from './chats.js';
+import { branchFromMessage, newChat, regenerateReply, startNewChat } from './chats.js';
 import { clearNotice, currentModel, els, mountDom, notify, state } from './dom.js';
 import { initAgainMenu } from './again-menu.js';
 import { initPreload } from './preload.js';
@@ -191,6 +191,14 @@ function wireEvents() {
   els.savePrompt.addEventListener('click', () => savePrompt());
   els.deletePrompt.addEventListener('click', () => deletePrompt());
   els.regenerate.addEventListener('click', () => regenerateReply());
+  // Delegated: renderThread() rebuilds every node, so per-node handlers would be
+  // re-bound on every open — and message-view.js importing chats.js to bind them
+  // would close a cycle.
+  els.thread.addEventListener('click', (e) => {
+    const button = e.target.closest?.('.msg-branch');
+    if (!button) return;
+    branchFromMessage(button.closest('.msg')?.getAttribute('data-message-id'));
+  });
   initAgainMenu((modelId) => regenerateReply(modelId));
   // Preloading finishes by refreshing the runtime view, which redraws the
   // rail. Handed in here rather than imported so preload.js never has to

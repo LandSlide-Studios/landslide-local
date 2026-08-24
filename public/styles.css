@@ -493,6 +493,39 @@ button, input, textarea { font-family: inherit; font-size: inherit; color: inher
 }
 .msg-user .msg-role { color: var(--accent); }
 
+/* ---------- per-message actions ---------- */
+
+/* Revealed on hover, and on keyboard focus — :focus-within is what keeps this
+   reachable without a mouse, since the button is the only focusable thing in
+   the row. Height is reserved either way so revealing it does not reflow the
+   thread under the pointer. */
+.msg-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  min-height: 20px;
+  margin-top: 2px;
+}
+.msg-branch {
+  font-family: var(--font-display);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  padding: 1px 8px;
+  background: transparent;
+  color: var(--rubble);
+  border: 1.5px solid var(--cream-dark);
+  border-radius: var(--r);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 90ms steps(2);
+}
+.msg:hover .msg-branch,
+.msg:focus-within .msg-branch { opacity: 1; }
+.msg-branch:hover { color: var(--ink); border-color: var(--ink); background: var(--cream-dark); }
+/* Never invisible while focused, whatever the pointer is doing. */
+.msg-branch:focus-visible { opacity: 1; outline: 2px solid var(--accent); outline-offset: 2px; }
+
+
 /* A model name we inferred rather than recorded. Dimmed and dotted so it does
    not sit in the same visual register as a name we actually know; the tooltip
    says which. */

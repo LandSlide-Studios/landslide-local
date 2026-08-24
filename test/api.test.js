@@ -167,3 +167,62 @@ test('path traversal via a chat id is rejected', async () => {
   assert.ok(res.status === 404 || res.status === 500, `unexpected status ${res.status}`);
   await h.close();
 });
+
+test('POST /api/chats/:id/branch forks the chat, and says why when it will not', async () => {
+  const h = await harness();
+  const { body: made } = await json(h.base, 'POST', '/api/chats', { modelId: 'deckard-4b' });
+  const id = made.chat.id;
+  await fetch(`${h.base}/api/chats/${id}/message`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ content: 'the question', modelId: 'deckard-4b' }),
+  }).then((r) => r.text());
+
+  const { body: read } = await json(h.base, 'GET', `/api/chats/${id}`);
+  const userTurnId = read.chat.messages[0].id;
+
+  const forked = await json(h.base, 'POST', `/api/chats/${id}/branch`, { messageId: userTurnId });
+  assert.equal(forked.status, 200);
+  assert.notEqual(forked.body.chat.id, id);
+  assert.equal(forked.body.chat.messages.length, 1, 'branching at the question keeps only the question');
+  assert.equal(forked.body.chat.modelId, 'deckard-4b');
+
+  // The source is untouched and both now exist.
+  const { body: after } = await json(h.base, 'GET', `/api/chats/${id}`);
+  assert.equal(after.chat.messages.length, 2);
+  assert.equal((await json(h.base, 'GET', '/api/chats')).body.chats.length, 2);
+
+  // A message that is not in this chat is the caller's mistake, not a 404: the
+  // URL resolved perfectly well.
+  assert.equal((await json(h.base, 'POST', `/api/chats/${id}/branch`, { messageId: 'nope' })).status, 400);
+  assert.equal((await json(h.base, 'POST', `/api/chats/${id}/branch`, {})).status, 400);
+  assert.equal((await json(h.base, 'POST', `/api/chats/${id}/branch`, { messageId: 42 })).status, 400);
+  // A chat that does not exist is.
+  assert.equal(
+    (await json(h.base, 'POST', '/api/chats/aaaaaaaaaaaa/branch', { messageId: userTurnId })).status,
+    404,
+  );
+  await h.close();
+});
+
+test('the start event carries the id of the turn it just saved, so the page can branch from it', async () => {
+  const h = await harness();
+  const { body: made } = await json(h.base, 'POST', '/api/chats', {});
+  const raw = await fetch(`${h.base}/api/chats/${made.chat.id}/message`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ content: 'hello', modelId: 'cold-fusion-9b' }),
+  }).then((r) => r.text());
+
+  const events = raw
+    .split('\n')
+    .filter((l) => l.startsWith('data: '))
+    .map((l) => JSON.parse(l.slice(6)));
+  const start = events.find((e) => e.type === 'start');
+  const done = events.find((e) => e.type === 'done');
+
+  const { body: read } = await json(h.base, 'GET', `/api/chats/${made.chat.id}`);
+  assert.equal(start.userMessageId, read.chat.messages[0].id, 'start names the user turn');
+  assert.equal(done.messageId, read.chat.messages[1].id, 'done names the reply');
+  await h.close();
+});

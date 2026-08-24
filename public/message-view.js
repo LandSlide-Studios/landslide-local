@@ -89,6 +89,25 @@ function labelMessage(roleEl, modelId, chatModelId) {
   return inferred?.format;
 }
 
+/**
+ * Give a message node its identity, and with it the ability to be branched from.
+ *
+ * A streaming reply has no id yet — the store issues one when it saves — so the
+ * control stays hidden until the id arrives on the `done` event and this is
+ * called a second time. Rendering a Branch button that would 400 is worse than
+ * not rendering one.
+ */
+function setMessageId(node, messageId) {
+  const branch = node.querySelector('.msg-branch');
+  if (!messageId) {
+    node.removeAttribute('data-message-id');
+    if (branch) branch.hidden = true;
+    return;
+  }
+  node.setAttribute('data-message-id', messageId);
+  if (branch) branch.hidden = false;
+}
+
 const hasReply = () => Boolean(els.thread.querySelector('.msg-assistant'));
 
 /** Export and Again only mean anything with a chat, and Again needs a reply. */
@@ -117,6 +136,7 @@ function renderThread(chat) {
   for (const m of chat.messages) {
     els.thread.append(
       buildMessage(m.role, m.content, m.thinking, m.stats, {
+        messageId: m.id ?? null,
         modelId: m.modelId ?? null,
         // Only ever the fallback, and only for replies written before the
         // per-message field existed.
@@ -145,7 +165,7 @@ function buildMessage(
   content = '',
   thinking = '',
   stats = null,
-  { pending = false, modelId = null, chatModelId = null } = {},
+  { pending = false, modelId = null, chatModelId = null, messageId = null } = {},
 ) {
   const node = els.tpl.content.firstElementChild.cloneNode(true);
   node.classList.add(role === 'user' ? 'msg-user' : 'msg-assistant');
@@ -171,7 +191,8 @@ function buildMessage(
   const producedNothing = !pending && role !== 'user' && !content && !thinking;
   renderText(node.querySelector('.msg-text'), producedNothing ? NO_OUTPUT : content, format);
   if (stats) node.querySelector('.msg-stats').textContent = statLine(stats);
+  setMessageId(node, messageId);
   return node;
 }
 
-export { buildMessage, renderContext, renderThread, updateChatActions };
+export { buildMessage, renderContext, renderThread, setMessageId, updateChatActions };

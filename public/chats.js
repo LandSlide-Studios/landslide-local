@@ -133,4 +133,31 @@ async function regenerateReply(modelId = null) {
   });
 }
 
-export { deleteChat, newChat, openChat, regenerateReply, startNewChat };
+/**
+ * Fork this chat at one message and open the fork.
+ *
+ * The copy is made server-side in one write, and the original is not touched —
+ * so the worst case if this fails is that nothing happened, rather than a
+ * half-made branch or a damaged source. The new chat is opened straight away
+ * because a branch nobody is looking at is just a duplicate in the sidebar.
+ */
+async function branchFromMessage(messageId) {
+  if (busyBlocks('Branching')) return;
+  if (!state.chatId || !messageId) return;
+  try {
+    const res = await apiFetch(`/api/chats/${state.chatId}/branch`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ messageId }),
+    });
+    const payload = await res.json().catch(() => null);
+    if (!res.ok) throw new Error(payload?.error ?? `server returned ${res.status}`);
+    clearNotice();
+    await loadChats(els.chatSearch.value);
+    await openChat(payload.chat.id);
+  } catch (err) {
+    notify(`Could not branch this chat: ${err.message ?? err}`);
+  }
+}
+
+export { branchFromMessage, deleteChat, newChat, openChat, regenerateReply, startNewChat };

@@ -29,6 +29,7 @@ import { createChatCrypto, ENVELOPE_OVERHEAD } from './chat-crypto.js';
 import {
   ID_RE,
   applyAppend,
+  applyBranch,
   applyDropLast,
   applyPatch,
   assertId,
@@ -38,6 +39,7 @@ import {
   isWellFormed,
   matches,
   normaliseMessage,
+  noSuchMessage,
   notFound,
   toMeta,
 } from './chat-record.js';
@@ -159,6 +161,25 @@ function createFileStore(dir, { ext, encode, decode, onDecodeError }) {
     },
     async create(input = {}) {
       return writeAtomic(blankChat(input));
+    },
+    /**
+     * Fork this chat at one message into a new one.
+     *
+     * The lock is taken on the SOURCE, not the copy: what has to be prevented is
+     * the original growing a turn between the read and the slice. The new chat
+     * has an id nothing else knows yet, so its write races nobody, and it is one
+     * write rather than one per message — a half-copied branch is not a state
+     * this can be left in.
+     */
+    async branch(id, messageId, options = {}) {
+      assertId(id);
+      return withLock(id, async () => {
+        const chat = await readOne(id);
+        if (!chat) throw notFound(id);
+        const next = applyBranch(chat, messageId, options);
+        if (!next) throw noSuchMessage(messageId);
+        return writeAtomic(next);
+      });
     },
     async appendMessage(id, message) {
       assertId(id);
@@ -321,6 +342,15 @@ export function createMemoryStore() {
       const chat = blankChat(input);
       chats.set(chat.id, chat);
       return structuredClone(chat);
+    },
+    async branch(id, messageId, options = {}) {
+      assertId(id);
+      const chat = chats.get(id);
+      if (!chat) throw notFound(id);
+      const next = applyBranch(chat, messageId, options);
+      if (!next) throw noSuchMessage(messageId);
+      chats.set(next.id, next);
+      return structuredClone(next);
     },
     async appendMessage(id, message) {
       assertId(id);

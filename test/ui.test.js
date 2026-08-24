@@ -1186,3 +1186,70 @@ test('a retry that never reaches the server does not move the rail or the stored
     await page.close();
   }
 });
+
+/* ------------------------------------------------------------------ */
+/* Branch from a message                                               */
+/* ------------------------------------------------------------------ */
+
+test('branching from a message opens a fork carrying everything up to that point', async () => {
+  const page = await mount({ script: SCRIPTED, delayMs: 4, chunkSize: 8 });
+  try {
+    const thread = page.byId('thread');
+    page.submit('first question');
+    await waitFor('the first reply', () => finished(thread), 30_000);
+    page.submit('second question');
+    await waitFor('the second reply', () => thread.querySelectorAll('.msg-assistant').length === 2 && finished(thread), 30_000);
+    assert.equal(thread.querySelectorAll('.msg').length, 4);
+
+    // Every message has an id by now — including the two just streamed, which
+    // never came from disk.
+    const msgs = thread.querySelectorAll('.msg');
+    assert.ok(
+      msgs.every((m) => m.getAttribute('data-message-id')),
+      'a turn the page drew optimistically still has to be branchable without a reload',
+    );
+
+    // Fork at the FIRST reply: the branch should hold two messages, not four.
+    const forkAt = msgs[1];
+    dispatch(forkAt.querySelector('.msg-branch'), makeEvent('click'));
+    await waitFor('the sidebar to show both chats', () => page.byId('chatList').querySelectorAll('.chat-row').length === 2);
+    await waitFor('the fork to be the open thread', () => thread.querySelectorAll('.msg').length === 2, 30_000);
+
+    assert.deepEqual(
+      thread.querySelectorAll('.msg-text').map((t) => t.textContent),
+      ['first question', 'This is a scripted reply.'],
+      'the fork holds everything up to and including the message branched at',
+    );
+
+    const { chats } = await (await fetch(`${page.base}/api/chats`)).json();
+    assert.equal(chats.length, 2);
+    const source = chats.find((c) => c.messageCount === 4);
+    assert.ok(source, 'the original still has all four turns');
+    const fork = chats.find((c) => c.messageCount === 2);
+    assert.match(fork.title, /\(branch\)$/, 'and the fork is named as one');
+  } finally {
+    await page.close();
+  }
+});
+
+test('the Branch control is absent until the message it belongs to has been saved', async () => {
+  const page = await mount({ script: SCRIPTED, delayMs: 80, chunkSize: 2 });
+  try {
+    const thread = page.byId('thread');
+    page.submit('a question');
+    await waitFor('the pending reply', () => thread.querySelector('.msg-assistant'));
+
+    const pending = thread.querySelector('.msg-assistant');
+    assert.equal(
+      pending.querySelector('.msg-branch').hidden,
+      true,
+      'a reply still streaming has no id yet, and a Branch button that would 400 is worse than none',
+    );
+
+    await waitFor('it to finish', () => finished(thread), 30_000);
+    assert.equal(pending.querySelector('.msg-branch').hidden, false, 'once saved it can be branched from');
+    assert.ok(pending.getAttribute('data-message-id'));
+  } finally {
+    await page.close();
+  }
+});

@@ -13,6 +13,9 @@ const JSON_HEADERS = { 'content-type': 'application/json; charset=utf-8' };
 /** A client mistake is not a server fault; report it as one of theirs. */
 export function statusForCode(code) {
   if (code === 'ENOTFOUND_CHAT') return 404;
+  // The chat exists; the message named in the body does not. That is a bad
+  // request, not a missing resource — the URL resolved fine.
+  if (code === 'ENOTFOUND_MESSAGE') return 400;
   if (code === 'EINVALID_ID') return 400;
   return 500;
 }

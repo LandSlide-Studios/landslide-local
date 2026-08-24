@@ -13,7 +13,7 @@
 
 import { apiFetch } from './api-client.js';
 import { NO_OUTPUT, dur, els, notify, scheduleThinkScroll, scrollToEnd, state, statLine } from './dom.js';
-import { buildMessage, renderContext, updateChatActions } from './message-view.js';
+import { buildMessage, renderContext, setMessageId, updateChatActions } from './message-view.js';
 import { appendStream, renderText } from './render.js';
 import { EVENT } from './shared/events.js';
 import { loadChats } from './sidebar.js';
@@ -66,6 +66,11 @@ async function streamReply({ path, payload, model, onStarted }) {
         // belongs here and not before the request, or a request that never
         // lands leaves the page asserting something the disk does not say.
         onStarted?.(event);
+        // The user's turn was drawn before the server had issued it an id.
+        if (event.userMessageId) {
+          const mine = [...els.thread.querySelectorAll('.msg-user')].pop();
+          if (mine) setMessageId(mine, event.userMessageId);
+        }
         renderContext(event.context);
         // The one thing this item exists to prevent: turns leaving the prompt
         // without anybody being told. It goes in the notice bar, which survives
@@ -106,6 +111,8 @@ async function streamReply({ path, payload, model, onStarted }) {
         els.statusMeta.textContent = `${event.stats.tokens} tok · ${event.stats.tokensPerSecond} tok/s`;
       } else if (event.type === 'done') {
         statsEl.textContent = statLine(event.stats) + (event.aborted ? '  ·  stopped' : '');
+        // Saved now, so it has an id and can be branched from without a reload.
+        if (event.messageId) setMessageId(reply, event.messageId);
         await loadChats(els.chatSearch.value);
       } else if (event.type === 'error') {
         throw new Error(event.message);

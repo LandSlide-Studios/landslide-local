@@ -77,6 +77,66 @@ for (const [label, make] of adapters) {
     await cleanup();
   });
 
+  test(`[${label}] branch copies the chat up to one message and leaves the source alone`, async () => {
+    const { store, cleanup } = await make();
+    const { id } = await store.create({ title: 'the original', modelId: 'cold-fusion-9b' });
+    await store.updateChat(id, { systemPrompt: 'be terse', options: { temperature: 0.4 } });
+    await store.appendMessage(id, { role: 'user', content: 'q1' });
+    await store.appendMessage(id, { role: 'assistant', content: 'a1', modelId: 'cold-fusion-9b' });
+    await store.appendMessage(id, { role: 'user', content: 'q2' });
+    await store.appendMessage(id, { role: 'assistant', content: 'a2', modelId: 'deckard-4b' });
+
+    const source = await store.get(id);
+    const forkPoint = source.messages[1].id; // the first reply
+    const fork = await store.branch(id, forkPoint);
+
+    assert.notEqual(fork.id, id, 'a branch is a different chat');
+    assert.equal(fork.messages.length, 2, 'inclusive of the message branched at, and nothing after it');
+    assert.deepEqual(
+      fork.messages.map((m) => m.content),
+      ['q1', 'a1'],
+    );
+    assert.equal(fork.messages[1].modelId, 'cold-fusion-9b', 'authorship comes with it');
+    assert.equal(fork.messages[1].createdAt, source.messages[1].createdAt, 'and so does when it was said');
+    assert.ok(
+      fork.messages.every((m) => !source.messages.some((o) => o.id === m.id)),
+      'message ids are reissued: two chats must not answer to one id',
+    );
+
+    // The settings are what make a branch a comparison rather than a fresh start.
+    assert.equal(fork.modelId, 'cold-fusion-9b');
+    assert.equal(fork.systemPrompt, 'be terse');
+    assert.deepEqual(fork.options, { temperature: 0.4 });
+    assert.deepEqual(fork.branchedFrom, { chatId: id, messageId: forkPoint });
+    assert.match(fork.title, /\(branch\)$/);
+
+    const after = await store.get(id);
+    assert.deepEqual(after.messages, source.messages, 'the source must be untouched, message for message');
+    assert.equal(after.title, 'the original');
+    assert.equal((await store.list()).length, 2);
+    await cleanup();
+  });
+
+  test(`[${label}] branch refuses a message that is not in the chat`, async () => {
+    const { store, cleanup } = await make();
+    const { id } = await store.create({ title: 'x' });
+    await store.appendMessage(id, { role: 'user', content: 'only turn' });
+    const other = await store.create({ title: 'elsewhere' });
+    await store.appendMessage(other.id, { role: 'user', content: 'a turn in a different chat' });
+    const strangerId = (await store.get(other.id)).messages[0].id;
+
+    for (const bad of ['nope', strangerId]) {
+      await assert.rejects(
+        () => store.branch(id, bad),
+        (err) => err.code === 'ENOTFOUND_MESSAGE',
+        `branching at ${bad} must be refused, not silently produce an empty chat`,
+      );
+    }
+    assert.equal((await store.list()).length, 2, 'and must not have created anything');
+    await assert.rejects(() => store.branch(newId(), 'whatever'), (err) => err.code === 'ENOTFOUND_CHAT');
+    await cleanup();
+  });
+
   test(`[${label}] round-trips a conversation`, async () => {
     const { store, cleanup } = await make();
     const { id } = await store.create({});

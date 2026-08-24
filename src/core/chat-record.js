@@ -220,6 +220,67 @@ export function isWellFormed(chat) {
   );
 }
 
+/**
+ * A copy of this chat up to and including one message, as a new chat.
+ *
+ * Inclusive of the named message whatever its role. Branching at a reply means
+ * "keep that answer and go somewhere else from here"; branching at a question
+ * means "ask this again and take the other road". Both are useful and both are
+ * the same slice, so there is no role rule to remember.
+ *
+ * Message ids are reissued. Two chats sharing an id would be two different
+ * things answering to the same name — `done.messageId` already identifies a
+ * message to the page, and the export and the store both assume ids are
+ * theirs. Everything else about a message is preserved verbatim, timestamps and
+ * authorship included: this is the same conversation, not a re-enactment of it.
+ *
+ * Returns null when the message is not in this chat, so the caller can tell
+ * "no such message" from "no such chat".
+ */
+export function applyBranch(chat, messageId, { title } = {}) {
+  const at = chat.messages.findIndex((m) => m.id === messageId);
+  if (at < 0) return null;
+  const ts = nowIso();
+  return {
+    id: newId(),
+    title: cleanTitle(title) || branchTitle(chat.title),
+    // The settings are what make a branch a fair comparison rather than a fresh
+    // start: same model, same system prompt, same sampling.
+    modelId: chat.modelId ?? null,
+    systemPrompt: typeof chat.systemPrompt === 'string' ? chat.systemPrompt : '',
+    options: chat.options ?? null,
+    createdAt: ts,
+    updatedAt: ts,
+    branchedFrom: { chatId: chat.id, messageId },
+    messages: chat.messages.slice(0, at + 1).map((m) => ({
+      id: newId(),
+      role: m.role,
+      content: typeof m.content === 'string' ? m.content : '',
+      thinking: typeof m.thinking === 'string' ? m.thinking : '',
+      createdAt: m.createdAt ?? ts,
+      stats: m.stats && typeof m.stats === 'object' ? m.stats : null,
+      modelId: typeof m.modelId === 'string' && m.modelId ? m.modelId : null,
+    })),
+  };
+}
+
+/**
+ * Branches of branches stay one word long. Without the strip, three forks deep
+ * reads "Why is X (branch) (branch) (branch)" and the cap then eats the part
+ * that said what the chat was about.
+ */
+function branchTitle(title) {
+  const base = cleanTitle(String(title ?? '').replace(/ \(branch(?: \d+)?\)$/, '')) || 'New chat';
+  return cleanTitle(`${base} (branch)`);
+}
+
+/** The message named is not in this chat. Distinct from the chat being absent. */
+export function noSuchMessage(messageId) {
+  const err = new Error(`no such message in this chat: ${String(messageId).slice(0, 40)}`);
+  err.code = 'ENOTFOUND_MESSAGE';
+  return err;
+}
+
 /** Callers (and the HTTP layer) need to tell "missing" from "broken". */
 export function notFound(id) {
   const err = new Error(`chat not found: ${id}`);
