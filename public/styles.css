@@ -74,7 +74,32 @@ button, input, textarea { font-family: inherit; font-size: inherit; color: inher
   padding: 18px 16px;
   background: var(--ink);
   border-right: 2px solid var(--ink);
-  overflow: hidden;
+  /* Scroll, do not clip. This column started as brand + models + chats and has
+     since gained a system prompt, a prompt library and a runtime bar. At 768px
+     the later sections were drawing straight over the model cards - the whole
+     suite passed while the sidebar was unusable, because no test can see two
+     things occupying the same pixels. */
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.sidebar::-webkit-scrollbar { width: 8px; }
+.sidebar::-webkit-scrollbar-thumb {
+  background: rgba(237, 233, 225, 0.22);
+  border-radius: var(--r);
+}
+
+/* Sections keep their natural height; only the chat list gives ground, and it
+   has its own scroller. Without this the flex parent shrinks every panel to fit
+   and the overlap comes back in a different form. */
+.sidebar > .panel,
+.sidebar > .brand,
+.sidebar > .runtime-bar,
+.sidebar > .side-foot {
+  flex: none;
+}
+.sidebar > .panel-grow {
+  flex: 1 1 auto;
+  min-height: 120px;
 }
 
 .brand { display: flex; align-items: center; gap: 12px; }
