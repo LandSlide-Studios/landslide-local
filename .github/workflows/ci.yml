@@ -1,0 +1,35 @@
+name: tests
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  test:
+    # The suite is stdlib-only and touches the filesystem and loopback sockets,
+    # so it runs on all three. Windows is first because that is where the app
+    # actually lives and where the platform-specific paths bite.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # No install step on purpose. There are no dependencies; if one ever
+      # appears, the preflight check below fails the build.
+      - name: Preflight
+        run: node scripts/preflight.mjs
+
+      - name: Acceptance lock
+        run: node scripts/acceptance-lock.mjs --verify
+
+      - name: Tests
+        run: node --test --test-force-exit --test-concurrency=1
