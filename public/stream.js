@@ -27,7 +27,7 @@ import { loadChats } from './sidebar.js';
  * already claimed `state.busy`.
  */
 async function streamReply({ path, payload, model }) {
-  const reply = buildMessage('assistant', '', '', null, { pending: true });
+  const reply = buildMessage('assistant', '', '', null, { pending: true, modelId: model.id });
   const replyText = reply.querySelector('.msg-text');
   const think = reply.querySelector('.think');
   const thinkText = reply.querySelector('.think-text');

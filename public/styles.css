@@ -472,6 +472,19 @@ button, input, textarea { font-family: inherit; font-size: inherit; color: inher
 }
 .msg-user .msg-role { color: var(--accent); }
 
+/* A model name we inferred rather than recorded. Dimmed and dotted so it does
+   not sit in the same visual register as a name we actually know; the tooltip
+   says which. */
+/* text-decoration, not border-bottom: the role cell is full-width with its text
+   right-aligned, so a border draws a rule clear across the column instead of
+   marking the word. */
+.msg-role.is-inferred {
+  opacity: 0.55;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+  cursor: help;
+}
+
 .msg-body { min-width: 0; }
 
 .msg-text {

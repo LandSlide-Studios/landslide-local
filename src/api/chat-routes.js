@@ -182,6 +182,10 @@ export function createChatRoutes({ store, runtime }) {
       content: result.answer,
       thinking: result.thinking,
       stats: result.stats,
+      // Stamped at the moment of writing, from the catalog id that actually
+      // reached the runtime — not read back off the chat later, which is the
+      // same value only until the next model switch.
+      modelId: model.id,
     });
 
     sse({

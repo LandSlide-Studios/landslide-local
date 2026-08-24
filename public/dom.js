@@ -114,6 +114,10 @@ const isResident = (id) => state.loaded.some((m) => m.name === id || m.name === 
 
 const currentModel = () => state.models.find((m) => m.id === state.modelId);
 
+/** A model by id, whatever is selected right now. Used to label a reply with
+    the model that wrote it rather than the one currently highlighted. */
+const modelById = (id) => (id ? state.models.find((m) => m.id === id) : undefined);
+
 /** What a finished turn that produced nothing shows — while streaming and after. */
 const NO_OUTPUT = '[no output]';
 
@@ -151,4 +155,4 @@ function scrollToEnd() {
   });
 }
 
-export { NO_OUTPUT, busyBlocks, clearNotice, currentModel, dur, isResident, notify, scheduleThinkScroll, scrollToEnd, statLine };
+export { NO_OUTPUT, busyBlocks, clearNotice, currentModel, dur, isResident, modelById, notify, scheduleThinkScroll, scrollToEnd, statLine };

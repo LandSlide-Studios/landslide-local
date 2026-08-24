@@ -482,3 +482,85 @@ test('the warm endpoint refuses a model that is not in the catalog', async () =>
   assert.match((await res.json()).error, /unknown model/);
   await h.close();
 });
+
+/* ================================================================== */
+/* Q3 — a reply is attributed to the model that wrote it              */
+/* ================================================================== */
+
+/**
+ * Issue #1. `chat.modelId` is the CURRENT choice, so labelling replies from it
+ * reassigns authorship of the whole history every time you switch models. The
+ * message has to carry its own.
+ */
+
+test('Q3: appendMessage persists the model that produced the reply', async () => {
+  for (const make of [createJsonFileStore, createMemoryStore]) {
+    const dir = await tmpDir();
+    const store = make === createMemoryStore ? make() : make(dir);
+    const chat = await store.create({ title: 'attribution' });
+
+    await store.appendMessage(chat.id, { role: 'user', content: 'hello' });
+    await store.appendMessage(chat.id, { role: 'assistant', content: 'hi', modelId: 'deckard-4b' });
+
+    const read = await store.get(chat.id);
+    assert.equal(read.messages[0].modelId, null, 'a user turn has no model');
+    assert.equal(read.messages[1].modelId, 'deckard-4b', `${make.name}: the reply must carry its model`);
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('Q3: a message written without a model reads back as null, not as a guess', async () => {
+  const dir = await tmpDir();
+  const store = createJsonFileStore(dir);
+  const chat = await store.create({ title: 'old', modelId: 'cold-fusion-9b' });
+  await store.appendMessage(chat.id, { role: 'assistant', content: 'from before' });
+
+  const read = await store.get(chat.id);
+  assert.equal(
+    read.messages[0].modelId,
+    null,
+    'the store must not backfill from the chat: it does not know, and saying so is the point',
+  );
+  await fs.rm(dir, { recursive: true, force: true });
+});
+
+test('Q3: switching models mid-chat leaves earlier replies attributed correctly', async () => {
+  const dir = await tmpDir();
+  const api = createApi({
+    store: createJsonFileStore(dir),
+    runtime: createRuntime({ adapter: 'fake' }),
+    config: {
+      hardware: { vramTotalGb: 8, vramUsableGb: 6.65, label: 'test gpu' },
+      storage: { chatsDir: dir, modelsDir: path.join(dir, 'models') },
+    },
+  });
+  const server = http.createServer(async (req, res) => {
+    const url = new URL(req.url, 'http://127.0.0.1');
+    if (!(await api(req, res, url))) res.writeHead(404).end('nope');
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+
+  const made = await (await fetch(`${base}/api/chats`, { method: 'POST' })).json();
+  const id = made.chat.id;
+  const send = (content, modelId) =>
+    fetch(`${base}/api/chats/${id}/message`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ content, modelId }),
+    }).then((r) => r.text());
+
+  await send('first question', 'cold-fusion-9b');
+  await send('second question', 'deckard-4b');
+
+  const { chat } = await (await fetch(`${base}/api/chats/${id}`)).json();
+  const replies = chat.messages.filter((m) => m.role === 'assistant');
+  assert.equal(replies.length, 2);
+  assert.equal(replies[0].modelId, 'cold-fusion-9b', 'the first reply keeps the model that wrote it');
+  assert.equal(replies[1].modelId, 'deckard-4b');
+  assert.equal(chat.modelId, 'deckard-4b', 'the chat itself has moved on, which is exactly why the message needs its own');
+
+  server.closeAllConnections();
+  await new Promise((r) => server.close(r));
+  await fs.rm(dir, { recursive: true, force: true });
+});

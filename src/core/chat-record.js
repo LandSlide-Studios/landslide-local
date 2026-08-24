@@ -147,6 +147,12 @@ export function normaliseMessage(message) {
     thinking: typeof message.thinking === 'string' ? message.thinking : '',
     createdAt: nowIso(),
     stats: message.stats && typeof message.stats === 'object' ? message.stats : null,
+    // Which model actually wrote this. The chat carries a modelId too, but that
+    // one is the CURRENT choice — switch models and it retroactively reassigns
+    // authorship of every earlier reply. This field is the only place the truth
+    // can live, and it is null for anything written before it existed rather
+    // than being guessed at on read.
+    modelId: typeof message.modelId === 'string' && message.modelId ? message.modelId : null,
   };
 }
 

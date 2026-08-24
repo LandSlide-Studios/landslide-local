@@ -8,7 +8,7 @@
  * disagreeing is a bug the user experiences as "it broke, then it fixed itself".
  */
 
-import { NO_OUTPUT, currentModel, els, scrollToEnd, state, statLine } from './dom.js';
+import { NO_OUTPUT, currentModel, els, modelById, scrollToEnd, state, statLine } from './dom.js';
 import { renderText } from './render.js';
 
 /* ---------------- context meter + chat actions ---------------- */
@@ -42,6 +42,33 @@ function renderContext(context) {
   els.contextMeter.classList.toggle('is-trimmed', dropped > 0);
 }
 
+/**
+ * Name the model that wrote a reply, and hand back the format profile to
+ * render it with. Three cases, and the third is the reason this is a function.
+ *
+ *   - The message names a model this build ships: use it, plainly.
+ *   - The message names a model that is no longer in the catalog: show the id
+ *     rather than a friendly name we no longer have. It is still the truth.
+ *   - The message names nothing, because it was written before replies carried
+ *     a model. The chat's model is the best available guess, so show it dimmed
+ *     and say in the tooltip that it IS a guess. Presenting a guess in the same
+ *     style as a fact is the bug this whole item exists to fix, only quieter.
+ */
+function labelMessage(roleEl, modelId, chatModelId) {
+  if (modelId) {
+    const known = modelById(modelId);
+    roleEl.textContent = known?.name ?? modelId;
+    return known?.format;
+  }
+  const inferred = modelById(chatModelId) ?? currentModel();
+  roleEl.textContent = inferred?.name ?? 'Model';
+  roleEl.classList.add('is-inferred');
+  roleEl.title =
+    "This chat's model. This reply was written before replies recorded their own " +
+    'model, so which one actually produced it was never saved.';
+  return inferred?.format;
+}
+
 const hasReply = () => Boolean(els.thread.querySelector('.msg-assistant'));
 
 /** Export and Again only mean anything with a chat, and Again needs a reply. */
@@ -63,7 +90,14 @@ function renderThread(chat) {
     return;
   }
   for (const m of chat.messages) {
-    els.thread.append(buildMessage(m.role, m.content, m.thinking, m.stats));
+    els.thread.append(
+      buildMessage(m.role, m.content, m.thinking, m.stats, {
+        modelId: m.modelId ?? null,
+        // Only ever the fallback, and only for replies written before the
+        // per-message field existed.
+        chatModelId: chat.modelId ?? null,
+      }),
+    );
   }
   updateChatActions();
   scrollToEnd();
@@ -81,14 +115,27 @@ function renderThread(chat) {
  * after F5. The placeholder has the same problem in reverse: the stream wrote
  * [no output] and the reload wrote nothing.
  */
-function buildMessage(role, content = '', thinking = '', stats = null, { pending = false } = {}) {
+function buildMessage(
+  role,
+  content = '',
+  thinking = '',
+  stats = null,
+  { pending = false, modelId = null, chatModelId = null } = {},
+) {
   const node = els.tpl.content.firstElementChild.cloneNode(true);
   node.classList.add(role === 'user' ? 'msg-user' : 'msg-assistant');
-  node.querySelector('.msg-role').textContent = role === 'user' ? 'You' : (currentModel()?.name ?? 'Model');
+  const roleEl = node.querySelector('.msg-role');
 
   // How this model writes, straight from the catalog via /api/state. A user's
   // own message is not a model's output, so it gets the neutral profile.
-  const format = role === 'user' ? undefined : currentModel()?.format;
+  //
+  // Both the label and the profile used to come from currentModel() — the
+  // model highlighted in the rail right now. Switch models and every earlier
+  // reply was retroactively reattributed AND re-rendered under the new model's
+  // profile, so a table-heavy reply could start rendering as prose.
+  let format;
+  if (role === 'user') roleEl.textContent = 'You';
+  else format = labelMessage(roleEl, modelId, chatModelId);
 
   const think = node.querySelector('.think');
   if (thinking) {
