@@ -195,7 +195,7 @@ button, input, textarea { font-family: inherit; font-size: inherit; color: inher
   font-weight: 500;
   color: #8FBF9F;
 }
-.model.is-active .model-resident { color: var(--cream); }
+.model.is-active .model-resident { color: var(--moss); }
 
 .model-warm {
   margin-left: auto;
@@ -211,12 +211,25 @@ button, input, textarea { font-family: inherit; font-size: inherit; color: inher
   opacity: 0.75;
 }
 .model-warm:hover { opacity: 1; background: rgba(237, 233, 225, 0.16); }
+/* On the cream card `color: inherit` resolves to the dimmed meta ink and then
+   loses another quarter to opacity. Legible on the dark cards; a grey ghost
+   here, which is the one control on the card you might actually want to press. */
+.model.is-active .model-warm { color: rgba(26, 26, 24, 0.82); opacity: 1; }
+.model.is-active .model-warm:hover { background: rgba(26, 26, 24, 0.10); }
 .model-warm:disabled { opacity: 0.4; cursor: wait; }
 
 /* ---------- model cards ---------- */
 
 .model-list { display: flex; flex-direction: column; gap: 7px; }
 
+/* The rail is a row of physical keys: standing proud at rest, half-depressed
+   under the cursor, and held down once chosen.
+
+   The offset shadow IS the travel. The card moves exactly as far as the shadow
+   is deep, so a pressed card ends up flat against the panel with nothing left
+   underneath it — which is why the chosen one needs no highlight to be found.
+   A shadow that stayed under the selected card would read as the one card that
+   is still raised, the opposite of what the click just did. */
 .model {
   display: block;
   width: 100%;
@@ -227,15 +240,33 @@ button, input, textarea { font-family: inherit; font-size: inherit; color: inher
   border-radius: var(--r);
   color: var(--cream);
   cursor: pointer;
-  transition: transform 80ms steps(2), box-shadow 80ms steps(2), background 80ms;
+  transform: translate(0, 0);
+  box-shadow: 2px 3px 0 0 rgba(237, 233, 225, 0.22);
+  transition: transform 80ms steps(2), box-shadow 80ms steps(2), background 80ms, color 80ms;
 }
-.model:hover { background: rgba(237, 233, 225, 0.12); border-color: rgba(237, 233, 225, 0.55); }
-.model:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.model:hover {
+  background: rgba(237, 233, 225, 0.12);
+  border-color: rgba(237, 233, 225, 0.55);
+  transform: translate(1px, 1px);
+  box-shadow: 1px 2px 0 0 rgba(237, 233, 225, 0.28);
+}
+/* The bottom of the stroke, held only while the button is down. */
+.model:active {
+  transform: translate(2px, 3px);
+  box-shadow: 0 0 0 0 rgba(237, 233, 225, 0);
+}
+.model:focus-visible { outline: 2px solid var(--cream); outline-offset: 3px; }
 
-.model.is-active {
-  background: var(--accent);
+/* Chosen = still held down. Cream against the ink panel does the identifying;
+   :hover is overridden so passing the cursor over the chosen card cannot lift
+   it back up. */
+.model.is-active,
+.model.is-active:hover {
+  background: var(--cream);
   border-color: var(--cream);
-  box-shadow: 2px 3px 0 0 rgba(237, 233, 225, 0.30);
+  color: var(--ink);
+  transform: translate(2px, 3px);
+  box-shadow: 0 0 0 0 rgba(237, 233, 225, 0);
 }
 
 .model-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
@@ -263,7 +294,7 @@ button, input, textarea { font-family: inherit; font-size: inherit; color: inher
   line-height: 1.35;
   color: rgba(237, 233, 225, 0.62);
 }
-.model.is-active .model-tag { color: rgba(237, 233, 225, 0.92); }
+.model.is-active .model-tag { color: rgba(26, 26, 24, 0.72); }
 
 .model-meta {
   display: flex; align-items: center; gap: 6px;
@@ -272,7 +303,7 @@ button, input, textarea { font-family: inherit; font-size: inherit; color: inher
   letter-spacing: 0.04em;
   color: rgba(237, 233, 225, 0.50);
 }
-.model.is-active .model-meta { color: rgba(237, 233, 225, 0.85); }
+.model.is-active .model-meta { color: rgba(26, 26, 24, 0.58); }
 
 .fit {
   padding: 1px 5px;
@@ -283,7 +314,7 @@ button, input, textarea { font-family: inherit; font-size: inherit; color: inher
 .fit-fits { color: #8FBF9F; }
 .fit-tight { color: #E3B341; }
 .fit-spills { color: #E08A6E; }
-.model.is-active .fit { color: var(--cream); }
+.model.is-active .fit { color: rgba(26, 26, 24, 0.78); }
 
 /* ---------- system prompt + prompt library ---------- */
 
@@ -344,7 +375,14 @@ button, input, textarea { font-family: inherit; font-size: inherit; color: inher
   color: rgba(237, 233, 225, 0.78);
 }
 .chat-row:hover { background: rgba(237, 233, 225, 0.08); border-color: rgba(237, 233, 225, 0.25); }
-.chat-row.is-active { background: rgba(196, 65, 26, 0.22); border-color: var(--accent); color: var(--cream); }
+/* The open chat, in the same cream language as the chosen model but at a much
+   lower weight. Two solid cream blocks in one column would compete for the same
+   "you are here", and only one of them is the thing being answered. */
+.chat-row.is-active {
+  background: rgba(237, 233, 225, 0.15);
+  border-color: rgba(237, 233, 225, 0.60);
+  color: var(--cream);
+}
 
 .chat-main { flex: 1; min-width: 0; }
 .chat-title {
