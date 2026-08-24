@@ -107,15 +107,18 @@ async function regenerateReply(modelId = null) {
   }
   // Retrying with a different model is a real switch, not a one-off override:
   // the regenerate route writes the model onto the chat, so the rail has to
-  // follow or it sits there naming a model this chat is no longer on. Done
-  // BEFORE the request so the pending reply is labelled with what is answering
-  // it, and skipped when the id is unknown rather than blanking the selection.
+  // follow or it sits there naming a model this chat is no longer on.
+  //
+  // It follows on the `start` event, NOT before the request. Moving it first
+  // was wrong in a way nothing announced: if the request failed - server down,
+  // 400, the machine asleep - the rail and localStorage had switched, the chat
+  // on disk had not, and the user's next ordinary message then silently went to
+  // a model that had produced nothing.
   const chosen = modelId ? modelById(modelId) : currentModel();
   if (!chosen) {
     notify('That model is not one this build ships.');
     return;
   }
-  if (chosen.id !== state.modelId) markModelSelected(chosen.id);
   const model = chosen;
   state.busy = true;
   els.thread.removeChild(last);
@@ -124,6 +127,9 @@ async function regenerateReply(modelId = null) {
     path: `/api/chats/${state.chatId}/regenerate`,
     payload: { modelId: model.id, systemPrompt: systemPromptText() },
     model,
+    onStarted: () => {
+      if (model.id !== state.modelId) markModelSelected(model.id);
+    },
   });
 }
 

@@ -211,13 +211,13 @@ function createElement(tag) {
     return copy;
   };
 
-  el.addEventListener = (type, fn) => {
+  el.addEventListener = (type, fn, opts) => {
     if (!el._listeners.has(type)) el._listeners.set(type, []);
-    el._listeners.get(type).push(fn);
+    el._listeners.get(type).push({ fn, capture: opts === true || opts?.capture === true });
   };
   el.removeEventListener = (type, fn) => {
     const list = el._listeners.get(type);
-    if (list) el._listeners.set(type, list.filter((f) => f !== fn));
+    if (list) el._listeners.set(type, list.filter((l) => l.fn !== fn));
   };
   el.dispatchEvent = (event) => dispatch(el, event);
 
@@ -281,14 +281,37 @@ function makeEvent(type, extra = {}) {
 }
 
 /** Real bubbling: a handler calling stopPropagation() must actually stop it. */
+/**
+ * Both phases, in the real order: capture from the root down to the target,
+ * then the target, then bubble back up.
+ *
+ * This used to be bubble-only, with the third argument to addEventListener
+ * ignored. That is not a simplification, it is an inversion: a capture listener
+ * on `document` fires FIRST in a browser and LAST in a bubble-only shim, so a
+ * bug where a document-level capture handler pre-empts a control's own click
+ * handler could not be expressed here at all. One was shipped behind exactly
+ * that gap.
+ */
 function dispatch(target, event) {
   event.target = event.target ?? target;
-  for (let n = target; n; n = n.parentNode ?? n._parentDocument ?? null) {
-    for (const fn of n._listeners?.get(event.type) ?? []) {
-      fn.call(n, event);
+  const path = [];
+  for (let n = target; n; n = n.parentNode ?? n._parentDocument ?? null) path.push(n);
+
+  // Capture: outermost first, not including the target.
+  for (let i = path.length - 1; i >= 1; i--) {
+    for (const l of path[i]._listeners?.get(event.type) ?? []) {
+      if (!l.capture) continue;
+      l.fn.call(path[i], event);
       if (event.propagationStopped) return !event.defaultPrevented;
     }
-    if (event.propagationStopped) return !event.defaultPrevented;
+  }
+  // At the target both kinds fire, in registration order; then bubble.
+  for (const n of path) {
+    for (const l of n._listeners?.get(event.type) ?? []) {
+      if (n !== target && l.capture) continue; // already ran in the capture pass
+      l.fn.call(n, event);
+      if (event.propagationStopped) return !event.defaultPrevented;
+    }
   }
   return !event.defaultPrevented;
 }
@@ -393,9 +416,9 @@ function makeDocument(root) {
     getElementById: (id) => descendants(root).find((d) => d.attributes.id === id) ?? null,
     querySelector: (sel) => root.querySelector(sel),
     querySelectorAll: (sel) => root.querySelectorAll(sel),
-    addEventListener: (type, fn) => {
+    addEventListener: (type, fn, opts) => {
       if (!doc._listeners.has(type)) doc._listeners.set(type, []);
-      doc._listeners.get(type).push(fn);
+      doc._listeners.get(type).push({ fn, capture: opts === true || opts?.capture === true });
     },
     removeEventListener: () => {},
     dispatchEvent: (event) => dispatch(doc, event),
@@ -1086,6 +1109,80 @@ test('the Again caret dies with the Again button, and closes any open menu', asy
     );
     await waitFor('it to finish', () => finished(page.byId('thread')), 30_000);
   } finally {
+    await page.close();
+  }
+});
+
+test('the caret toggles the menu shut again, and a click elsewhere dismisses it', async () => {
+  const page = await mount({ script: SCRIPTED, delayMs: 4, chunkSize: 8 });
+  try {
+    page.submit('a question');
+    await waitFor('the reply', () => finished(page.byId('thread')), 30_000);
+
+    const trigger = page.byId('regenerateWith');
+    const menu = page.byId('regenerateMenu');
+
+    dispatch(trigger, makeEvent('click'));
+    assert.equal(menu.hidden, false, 'first click opens');
+
+    // The whole point of a disclosure trigger: pressing it again puts it back.
+    dispatch(trigger, makeEvent('click'));
+    assert.equal(menu.hidden, true, 'second click on the caret must close it');
+    assert.equal(trigger.getAttribute('aria-expanded'), 'false');
+
+    // And it must still be dismissable by clicking anything else.
+    dispatch(trigger, makeEvent('click'));
+    assert.equal(menu.hidden, false);
+    dispatch(page.byId('prompt'), makeEvent('click'));
+    assert.equal(menu.hidden, true, 'a click outside the menu dismisses it');
+  } finally {
+    await page.close();
+  }
+});
+
+test('a retry that never reaches the server does not move the rail or the stored model', async () => {
+  const page = await mount({ script: SCRIPTED, delayMs: 4, chunkSize: 8 });
+  const realFetch = globalThis.fetch;
+  try {
+    page.submit('a question');
+    await waitFor('the reply', () => finished(page.byId('thread')), 30_000);
+
+    const railBefore = page.byId('modelList').querySelector('.model.is-active').querySelector('.model-name').textContent;
+    const { chats } = await realFetch(`${page.base}/api/chats`).then((r) => r.json());
+    const chatId = chats[0].id;
+    const storedBefore = (await realFetch(`${page.base}/api/chats/${chatId}`).then((r) => r.json())).chat.modelId;
+    const localBefore = globalThis.localStorage.getItem('ls.modelId');
+
+    // The model server dies, the box sleeps, the route 500s — all one shape
+    // from here: the request does not land.
+    globalThis.fetch = (input, init) =>
+      String(input).includes('/regenerate')
+        ? Promise.reject(new Error('the model server is not answering'))
+        : realFetch(input, init);
+
+    dispatch(page.byId('regenerateWith'), makeEvent('click'));
+    const other = page
+      .byId('regenerateMenu')
+      .querySelectorAll('.again-item')
+      .find((i) => i.querySelector('.again-item-name').textContent !== railBefore);
+    dispatch(other, makeEvent('click'));
+    await waitFor('the failure to settle', () => page.byId('statusBar').hidden === true, 30_000);
+
+    assert.equal(
+      page.byId('modelList').querySelector('.model.is-active').querySelector('.model-name').textContent,
+      railBefore,
+      'a retry that never landed must not leave the rail naming the model it would have used',
+    );
+    assert.equal(globalThis.localStorage.getItem('ls.modelId'), localBefore, 'and must not persist it either');
+
+    const storedAfter = (await realFetch(`${page.base}/api/chats/${chatId}`).then((r) => r.json())).chat.modelId;
+    assert.equal(storedAfter, storedBefore, 'the chat on disk never moved, so nothing on screen should say it did');
+    assert.ok(
+      page.byId('thread').querySelector('.msg-error'),
+      'and the failure is shown, not swallowed',
+    );
+  } finally {
+    globalThis.fetch = realFetch;
     await page.close();
   }
 });

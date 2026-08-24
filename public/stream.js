@@ -26,7 +26,7 @@ import { loadChats } from './sidebar.js';
  * finally that gives the composer back whatever happened. The caller has
  * already claimed `state.busy`.
  */
-async function streamReply({ path, payload, model }) {
+async function streamReply({ path, payload, model, onStarted }) {
   const reply = buildMessage('assistant', '', '', null, { pending: true, modelId: model.id });
   const replyText = reply.querySelector('.msg-text');
   const think = reply.querySelector('.think');
@@ -60,6 +60,12 @@ async function streamReply({ path, payload, model }) {
 
     for await (const event of sseEvents(res.body)) {
       if (event.type === 'start') {
+        // The server has committed by now: the route writes the model onto the
+        // chat before it opens the stream. Anything the caller wants to change
+        // on the strength of that - the rail moving to a model retried with -
+        // belongs here and not before the request, or a request that never
+        // lands leaves the page asserting something the disk does not say.
+        onStarted?.(event);
         renderContext(event.context);
         // The one thing this item exists to prevent: turns leaving the prompt
         // without anybody being told. It goes in the notice bar, which survives

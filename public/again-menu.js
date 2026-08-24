@@ -31,6 +31,9 @@ function render() {
       item.className = 'again-item';
       item.setAttribute('role', 'menuitem');
       item.setAttribute('data-model-id', m.id);
+      // Roving tabindex: a menu is ONE tab stop, and arrows move within it.
+      // Five reachable tab stops is the widget lying about its own shape.
+      item.setAttribute('tabindex', '-1');
       // The one it is already on is still offered — retrying with the same
       // model is what the plain Again button does, and a menu that silently
       // omits the obvious entry reads as a bug.
@@ -45,7 +48,8 @@ function render() {
       note.className = `again-item-fit fit-${m.fit?.verdict ?? 'unknown'}`;
       // The same honesty as the rail: a model that will not fit says so here
       // too, because this menu is a second door to committing the card.
-      note.textContent = current ? 'current' : (m.fit?.verdict ?? '');
+      const verdict = m.fit?.verdict ?? '';
+      note.textContent = current ? `current · ${verdict}`.trim().replace(/ ·$/, '') : verdict;
 
       item.append(name, note);
       item.addEventListener('click', () => {
@@ -116,9 +120,11 @@ function initAgainMenu(onPick) {
       items().at(-1)?.focus();
     } else if (e.key === 'Escape') {
       e.preventDefault();
-      // Escape while a reply is streaming also aborts it, and the document
-      // handler that does so runs after this one. Stopping here keeps closing
-      // a menu from killing a generation the user never meant to touch.
+      // An open menu consumes Escape. Today the only document-level Escape
+      // handler aborts a running reply, and a running reply already closes this
+      // menu — so this stops nothing that can currently happen. It stays because
+      // the alternative is a menu whose dismissal also fires whatever else the
+      // page later binds to Escape, which is a bug waiting for its second cause.
       e.stopPropagation();
       close({ restoreFocus: true });
     } else if (e.key === 'Tab') {
@@ -127,10 +133,15 @@ function initAgainMenu(onPick) {
     }
   });
 
-  // Anywhere else on the page. `capture` is deliberate: an item's own click
-  // handler has already closed the menu by the time this would run, and a
-  // bubbling listener would fire on a menu that is no longer open anyway.
-  document.addEventListener('click', () => close(), true);
+  // Anywhere else on the page — and deliberately NOT in the capture phase.
+  //
+  // Capture was the first attempt and it silently broke the trigger. A capture
+  // listener on `document` runs BEFORE the target's own handler, so every click
+  // on the caret closed the menu first and the toggle then read isOpen as false
+  // and re-opened it. The menu could be opened and never shut by the same
+  // button. Bubbling puts this after the trigger, where its stopPropagation
+  // actually means something.
+  document.addEventListener('click', () => close());
 }
 
 /** Used by the code that disables Again, so a menu cannot outlive its trigger. */

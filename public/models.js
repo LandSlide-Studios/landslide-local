@@ -279,8 +279,6 @@ function selectModel(id) {
 }
 
 /**
-
-/**
  * Arrow keys inside the model list.
  *
  * It is a `role="radiogroup"`, and a radiogroup that only answers to clicks and
@@ -299,10 +297,8 @@ function moveModelSelection(step) {
 }
 
 export {
-  forgetPreloads,
   markModelSelected,
   moveModelSelection,
-  preloadModel,
   refreshRuntime,
   renderFacts,
   renderModels,
