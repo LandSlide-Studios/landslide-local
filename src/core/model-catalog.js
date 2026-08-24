@@ -1,58 +1,101 @@
 /**
- * ModelCatalog — the five uncensored Qwen 3.5 models this app ships with,
- * with the facts needed to decide whether one will actually run here.
+ * ModelCatalog — a LOADER, not a list.
+ *
+ * The models themselves live in `models.json` at the repo root: id, repo, file,
+ * quant, size, per-model generation defaults and which format profile the model
+ * writes in. Adding, removing or re-tuning a model is an edit to that file and
+ * nothing else — no source change and no second place to keep in step.
+ * `fetch-models.mjs`, `verify-urls.mjs`, `preflight.mjs` and the MCP server all
+ * read this module, so they all see that one file.
+ *
+ * What stays here is the behaviour: what a model means for the machine it has to
+ * run on, and which generation options are allowed to reach a runtime.
  *
  * Interface:
  *   all()                     -> Model[]
  *   get(id)                   -> Model | undefined
  *   fitFor(model, vramGb)     -> { verdict, headroomGb, note }
  *   withAvailability(list)    -> Model[]  (marks .installed from runtime tags)
+ *   totalSizeGb()             -> number
  *   optionsFor(model, asked)  -> the generation options that may reach a runtime
+ *   checkOptions(asked)       -> string[]  (the strict door, for stored options)
  *   KEEP_ALIVE                -> how long a loaded model is asked to stay resident
+ *   RESERVE_GB                -> the runtime's VRAM reserve at the default context
  *
- * Sizes and filenames are verified against the Hugging Face repos with a HEAD request
- * (scripts/verify-urls.mjs), not guessed. Sizes are GiB, matching how VRAM is measured;
- * Hugging Face displays decimal GB, so its numbers read about 7% larger.
- * `runtimeCost` is the KV cache + compute buffer reserve at the default context.
+ * Sizes and filenames are verified against the Hugging Face repos with a HEAD
+ * request (scripts/verify-urls.mjs), not guessed. Sizes are GiB, matching how
+ * VRAM is measured; Hugging Face displays decimal GB, so its numbers read about
+ * 7% larger. `runtimeCost` is the KV cache + compute buffer reserve at the
+ * default context.
  */
 
-const RUNTIME_RESERVE_GB = 0.85;
-
-/**
- * How long the runner is asked to keep a model resident.
- *
- * Every request that touches a model must state the SAME value. Ollama resets
- * the eviction timer from whatever the current request says, so a preload
- * asking for 30 minutes followed by a chat call that says nothing drops the
- * model back to the server's 5-minute default — which is how "models stay
- * loaded for 30 minutes" stopped being true after the first message.
- */
-export const KEEP_ALIVE = '30m';
+import { readFileSync } from 'node:fs';
 
 /**
- * The only generation options that may reach a runtime, and the range each is
- * allowed to hold. Anything outside this table is dropped rather than
- * forwarded: `num_predict: -1` means "generate until the context is full",
- * which on a shared 8 GB card is a request to hang the machine.
+ * Read once, at import, and synchronously.
  *
- * `unboundedMeansMax` reads Ollama's "no limit" sentinels (-1, 0) as "as much
- * as this app allows" instead of clamping them to one token.
+ * Every caller of `all()` and `get()` is synchronous — the HTTP layer, the MCP
+ * tool schema, preflight — so a promise here would ripple through all of them
+ * for no gain. The file is a few kilobytes on the same disk as the code.
  */
-const OPTION_LIMITS = Object.freeze({
-  temperature: { min: 0, max: 2 },
-  top_p: { min: 0, max: 1 },
-  top_k: { min: 1, max: 1000, integer: true },
-  repeat_penalty: { min: 0.1, max: 2 },
-  num_ctx: { min: 256, max: 262144, integer: true },
-  num_predict: { min: 1, max: 32768, integer: true, unboundedMeansMax: true },
-  // How many prompt tokens are evaluated in one pass. Bigger reads a long
-  // prompt faster and costs more VRAM for the compute buffer, so the right
-  // value is a fact about the model's size on THIS card, not a constant.
-  // Ollama's own default is 512; the ceiling is llama.cpp's default logical
-  // batch, and the floor is low enough to survive a heavy spill to system RAM
-  // without being so low that prompt processing collapses.
-  num_batch: { min: 32, max: 2048, integer: true },
-});
+const CATALOG_FILE = new URL('../../models.json', import.meta.url);
+
+/**
+ * Reading a file somebody might be halfway through writing.
+ *
+ * `models.json` is a plain file meant to be edited by hand, and a plain
+ * `writeFile` truncates before it writes — so a reader that arrives in that
+ * window sees zero bytes or half a document. Failing on the first attempt would
+ * turn "the editor happened to save while the app started" into a hard crash
+ * with a confusing message. A few immediate retries cover a window measured in
+ * microseconds; a file that is genuinely malformed still fails, and says so.
+ */
+const READ_ATTEMPTS = 5;
+
+function readCatalogFile() {
+  let last;
+  for (let attempt = 0; attempt < READ_ATTEMPTS; attempt += 1) {
+    try {
+      return JSON.parse(readFileSync(CATALOG_FILE, 'utf8'));
+    } catch (err) {
+      last = err;
+      // A missing file is not a race and will not fix itself; only a bad parse
+      // is worth waiting out.
+      if (err.code === 'ENOENT') break;
+      if (attempt < READ_ATTEMPTS - 1) pause(4);
+    }
+  }
+  throw new Error(`could not read the model catalog (models.json): ${last.message}`);
+}
+
+/** Sleep without going async: every caller of this module is synchronous. */
+function pause(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function loadCatalog() {
+  const parsed = readCatalogFile();
+  // Either shape reads: a bare array of models, or an object that also carries
+  // the settings they share. A file trimmed to just the array still works.
+  const list = Array.isArray(parsed) ? parsed : parsed?.models;
+  if (!Array.isArray(list) || list.length === 0) {
+    throw new Error('models.json must hold a non-empty array of models');
+  }
+  const profiles = (!Array.isArray(parsed) && parsed?.formats) || {};
+  return {
+    keepAlive: (!Array.isArray(parsed) && parsed?.keepAlive) || '30m',
+    reserveGb: Number.isFinite(parsed?.reserveGb) ? Number(parsed.reserveGb) : 0.85,
+    models: Object.freeze(
+      list.map((m) =>
+        Object.freeze({
+          ...m,
+          defaults: Object.freeze({ ...(m.defaults ?? {}) }),
+          format: Object.freeze(resolveFormat(m.format, profiles)),
+        }),
+      ),
+    ),
+  };
+}
 
 /**
  * How each model writes, which is not the same question as what the renderer
@@ -69,21 +112,72 @@ const OPTION_LIMITS = Object.freeze({
  *   far more likely to be dialogue than a bullet, so it is left as prose; a
  *   real list still renders when a blank line announces it.
  *
- * Everything the renderer needs is in the object, so an unknown profile name
- * still renders — the name is for the UI and for reading this table.
+ * A model NAMES its profile and the profile is defined once under `formats`,
+ * because three of the five share one and a table of five copies is a table
+ * that drifts. An unknown name — or an inline object, which the file is also
+ * allowed to carry — still resolves: everything the renderer needs is in the
+ * object it is handed, so the name is for the UI and for reading the file.
  */
-const FORMAT = Object.freeze({
-  structured: { profile: 'structured', tables: true, listsInterruptParagraph: true, indentPerLevel: 2 },
-  reasoning: { profile: 'reasoning', tables: true, listsInterruptParagraph: true, indentPerLevel: 4 },
-  prose: { profile: 'prose', tables: true, listsInterruptParagraph: false, indentPerLevel: 4 },
-});
+function resolveFormat(format, profiles) {
+  if (format && typeof format === 'object') return { ...format };
+  const named = typeof format === 'string' ? profiles[format] : null;
+  if (named && typeof named === 'object') return { profile: format, ...named };
+  return { profile: typeof format === 'string' && format ? format : 'default' };
+}
+
+const CATALOG = loadCatalog();
+
+/** @type {ReadonlyArray<Model>} */
+const MODELS = CATALOG.models;
+
+const RUNTIME_RESERVE_GB = CATALOG.reserveGb;
 
 /**
- * `num_batch` per model — how many prompt tokens are evaluated in one pass.
+ * How long the runner is asked to keep a model resident.
  *
- * These are MEASURED on this machine, not reasoned about, because reasoning
- * about them got the 21B wrong by 45%. Prompt-eval throughput on a 2,781-token
- * prompt, warm model, no reload (`prompt_eval_count / prompt_eval_duration`):
+ * Every request that touches a model must state the SAME value. Ollama resets
+ * the eviction timer from whatever the current request says, so a preload
+ * asking for 30 minutes followed by a chat call that says nothing drops the
+ * model back to the server's 5-minute default — which is how "models stay
+ * loaded for 30 minutes" stopped being true after the first message.
+ */
+export const KEEP_ALIVE = CATALOG.keepAlive;
+
+/**
+ * The only generation options that may reach a runtime, and the range each is
+ * allowed to hold. Anything outside this table is dropped rather than
+ * forwarded: `num_predict: -1` means "generate until the context is full",
+ * which on a shared 8 GB card is a request to hang the machine.
+ *
+ * This is code and not data on purpose. It is the whitelist that keeps the HTTP
+ * layer honest, and a whitelist a caller could widen by editing a data file
+ * would not be one.
+ *
+ * `unboundedMeansMax` reads Ollama's "no limit" sentinels (-1, 0) as "as much
+ * as this app allows" instead of clamping them to one token.
+ */
+const OPTION_LIMITS = Object.freeze({
+  temperature: { min: 0, max: 2 },
+  top_p: { min: 0, max: 1 },
+  top_k: { min: 1, max: 1000, integer: true },
+  repeat_penalty: { min: 0.1, max: 2 },
+  num_ctx: { min: 256, max: 262144, integer: true },
+  num_predict: { min: 1, max: 32768, integer: true, unboundedMeansMax: true },
+  // How many prompt tokens are evaluated in one pass. Bigger reads a long
+  // prompt faster and costs more VRAM for the compute buffer, so the right
+  // value is a fact about the model's size on THIS card, not a constant — which
+  // is why it sits per model in models.json. Ollama's own default is 512; the
+  // ceiling is llama.cpp's default logical batch, and the floor is low enough
+  // to survive a heavy spill to system RAM without being so low that prompt
+  // processing collapses. The measurements behind each value are below.
+  num_batch: { min: 32, max: 2048, integer: true },
+});
+
+/*
+ * `num_batch` per model — the values in models.json are MEASURED on this
+ * machine, not reasoned about, because reasoning about them got the 21B wrong
+ * by 45%. Prompt-eval throughput on a 2,781-token prompt, warm model, no reload
+ * (`prompt_eval_count / prompt_eval_duration`):
  *
  *              256      512     1024     2048   tok/s
  *   2B        5,661    6,006   *6,382*   6,108
@@ -111,107 +205,15 @@ const FORMAT = Object.freeze({
  * Generation speed is untouched by all of this — it is a prompt-processing
  * knob, and tok/s during generation stayed flat for every model at every value.
  *
- * A value here is only real if it is also whitelisted in OPTION_LIMITS and
- * mapped by the adapter. An option that no adapter forwards is decoration.
+ * A value in models.json is only real if it is also whitelisted in
+ * OPTION_LIMITS and mapped by the adapter. An option that no adapter forwards
+ * is decoration.
  */
-/** @type {ReadonlyArray<Model>} */
-const MODELS = Object.freeze([
-  {
-    id: 'cold-fusion-9b',
-    name: 'Cold Fusion GAIN',
-    params: '9B',
-    tagline: 'Best all-rounder. Sharpest at tables, code and structure.',
-    repo: 'DavidAU/Qwen3.5-9B-Cold-Fusion-GAIN-v1.0-Uncensored-Heretic-NEO-MAX-Imatrix-GGUF',
-    file: 'Qwen3.5-9B-C-Fusion-GAIN-UnHeretic-NM-DAU-NEO-MAX-NEO-IQ3_M.gguf',
-    quant: 'IQ3_M',
-    sizeGb: 5.23,
-    thinks: true,
-    uncensored: true,
-    accent: 'ember',
-    defaults: { temperature: 0.7, top_p: 0.9, top_k: 40, repeat_penalty: 1.0, num_ctx: 16384, num_batch: 512 },
-    format: FORMAT.structured,
-    blurb:
-      'GAIN training adapts per-sample during the run; the author claims it beats the 27B. ' +
-      'Thinks before answering, so expect reasoning time on hard prompts.',
-  },
-  {
-    id: 'heretic-instruct-9b',
-    name: 'Heretic Instruct',
-    params: '9B',
-    tagline: 'No reasoning block. Answers immediately — the daily driver.',
-    repo: 'mradermacher/Qwen3.5-9B-Claude-4.6-OS-HERETIC-UNCENSORED-INSTRUCT-i1-GGUF',
-    file: 'Qwen3.5-9B-Claude-4.6-OS-HERETIC-UNCENSORED-INSTRUCT.i1-Q4_K_S.gguf',
-    quant: 'i1-Q4_K_S',
-    sizeGb: 4.97,
-    thinks: false,
-    uncensored: true,
-    accent: 'ember',
-    defaults: { temperature: 0.7, top_p: 0.9, top_k: 40, repeat_penalty: 1.0, num_ctx: 16384, num_batch: 512 },
-    format: FORMAT.structured,
-    blurb:
-      'Same Claude 4.6 four-dataset tune as the thinking models with the reasoning block removed. ' +
-      'Five to ten times less wall-clock per answer.',
-  },
-  {
-    id: 'glm-flash-21b',
-    name: 'GLM-Flash Heretic',
-    params: '21B',
-    tagline: 'The heavyweight. Smartest here, and the slowest by far.',
-    repo: 'mradermacher/Qwen3.5-21B-GLM-4.7-Flash-Heretic-Uncensored-Thinking-i1-GGUF',
-    file: 'Qwen3.5-21B-GLM-4.7-Flash-Heretic-Uncensored-Thinking.i1-IQ2_M.gguf',
-    quant: 'i1-IQ2_M',
-    sizeGb: 7.32,
-    thinks: true,
-    uncensored: true,
-    accent: 'slate',
-    defaults: { temperature: 0.6, top_p: 0.9, top_k: 40, repeat_penalty: 1.0, num_ctx: 8192, num_batch: 1024 },
-    format: FORMAT.reasoning,
-    blurb:
-      'Qwen 3.5 27B contracted to 21B, then GLM 4.7 Flash tuned to shorten reasoning. ' +
-      'Will not fit entirely in 8GB — some layers run on the CPU, so it is markedly slower.',
-  },
-  {
-    id: 'deckard-4b',
-    name: 'Deckard',
-    params: '4B',
-    tagline: 'Fast and characterful. Fiction, voice and roleplay.',
-    repo: 'mradermacher/Qwen3.5-4B-Deckard-HERETIC-UNCENSORED-Thinking-i1-GGUF',
-    file: 'Qwen3.5-4B-Deckard-HERETIC-UNCENSORED-Thinking.i1-Q4_K_M.gguf',
-    quant: 'i1-Q4_K_M',
-    sizeGb: 2.52,
-    thinks: true,
-    uncensored: true,
-    accent: 'moss',
-    defaults: { temperature: 0.85, top_p: 0.92, top_k: 50, repeat_penalty: 1.0, num_ctx: 16384, num_batch: 512 },
-    format: FORMAT.prose,
-    blurb:
-      "DavidAU's character, POV and observation datasets at a size that leaves 4GB of VRAM spare. " +
-      'Noticeably better prose than its size suggests.',
-  },
-  {
-    id: 'auto-variable-2b',
-    name: 'Auto-Variable',
-    params: '2B',
-    tagline: 'Instant. For quick rewrites and throwaway drafting.',
-    repo: 'mradermacher/Qwen3.5-2B-Claude-4.6-OS-Auto-Variable-HERETIC-UNCENSORED-THINKING-i1-GGUF',
-    file: 'Qwen3.5-2B-Claude-4.6-OS-Auto-Variable-HERETIC-UNCENSORED-THINKING.i1-Q4_K_M.gguf',
-    quant: 'i1-Q4_K_M',
-    sizeGb: 1.19,
-    thinks: true,
-    uncensored: true,
-    accent: 'moss',
-    defaults: { temperature: 0.8, top_p: 0.9, top_k: 40, repeat_penalty: 1.0, num_ctx: 16384, num_batch: 1024 },
-    format: FORMAT.reasoning,
-    blurb:
-      'Reasoning length scales itself down on easy prompts, so it rarely stalls. ' +
-      'Genuinely less capable, but it answers in about a second.',
-  },
-]);
 
 // Object.freeze is shallow, so a spread copy still shares the same `defaults`
 // object. One `model.defaults.temperature = x` anywhere would change what every
 // later get() returns, process-wide. `format` is worse again: three models
-// share one FORMAT entry, so a caller editing it in place would re-format the
+// share one profile, so a caller editing it in place would re-format the
 // others too.
 export function all() {
   return MODELS.map((m) => ({ ...m, defaults: { ...m.defaults }, format: { ...m.format } }));

@@ -436,3 +436,121 @@ this is a repository whose README already says "measured on this machine, not
 estimated", and a plausible mechanism produced a number that was confidently and
 badly wrong. Anything added to `defaults` that claims a performance effect should
 arrive with the numbers, and the harness for taking them is four dozen lines.
+
+## E25. `I2-A3` cannot pass on Windows: it imports a drive path as an ESM specifier
+
+`test/acceptance/i2-architecture.test.js:80-89` spawns a fresh Node process to prove a
+model added to `models.json` is visible with no source edit, and builds the child's
+script like this:
+
+```js
+`import('${path.join(ROOT, 'src', 'core', 'model-catalog.js').replace(/\/g, '/')}')`
+```
+
+On Windows `ROOT` is `N:\wt-i2`, so the child runs
+`import('N:/wt-i2/src/core/model-catalog.js')`. `N:` parses as a URL scheme, and
+Node's default ESM loader accepts only `file:`, `data:` and `node:`:
+
+```
+Error [ERR_UNSUPPORTED_ESM_URL_SCHEME]: Only URLs with a scheme in: file, data, and
+node are supported by the default ESM loader. On Windows, absolute paths must be
+valid file:// URLs. Received protocol 'n:'
+```
+
+The child exits 1, `execFileSync` throws, and the assertion is never reached. Nothing
+in the repository can change that: the specifier is fixed by the test, and a custom
+loader can only be registered with a flag or with `NODE_OPTIONS`, neither of which the
+child receives. Reproduced directly:
+
+```
+$ node -e "import('N:/wt-i2/src/core/model-catalog.js').then(m=>console.log('OK'))"
+ERR_UNSUPPORTED_ESM_URL_SCHEME
+$ node -e "import('file://N:/wt-i2/src/core/model-catalog.js').then(m=>console.log('OK'))"
+OK
+```
+
+The fix is one prefix — `file://` — and `I2-C1`, eleven lines further down the same
+file, already does exactly that (`await import(\`file://${found.replace(/\/g,'/')}\`)`).
+The WHATWG parser's Windows-drive quirk rewrites `file://N:/x` to `file:///N:/x`, so
+the same string works unchanged. Acceptance files are locked and not the builder's to
+edit, so this is recorded rather than repaired.
+
+**The behaviour A3 exists to pin does work**, verified by running the test's own
+procedure with the corrected specifier: `models.json` was given a sixth entry
+`acceptance-probe-model`, a fresh `node -e` process imported `model-catalog.js` with no
+source edit and printed
+
+```
+cold-fusion-9b,heretic-instruct-9b,glm-flash-21b,deckard-4b,auto-variable-2b,acceptance-probe-model
+```
+
+and the file was restored. Someone with the planner's authority should add the prefix;
+until then the suite reads 227/228 on Windows and this is the one that is red.
+
+## E26. A duplicated `/**` survived the frontend split, verbatim
+
+`public/models.js`, above `PRELOAD_SETTLE_MS`, opens its comment with two `/**` lines
+in a row (it was `public/app.js:521-522` before the split). It is inert — the second
+one is just text inside the block the first one opened — and it was carried across
+unchanged rather than tidied, because a refactor that also makes cosmetic edits is a
+refactor whose diff nobody can read. One line to delete, whenever something else is
+being changed nearby.
+
+## E27. The sidebar overflows instead of scrolling on a short window
+
+Seen while doing the browser check for I2, at a 1256x768 viewport: below the fifth
+model card the sidebar's remaining sections — SYSTEM PROMPT, its library row, CHATS,
+the search box, `+ New` and the storage hint — are drawn ON TOP of the model cards
+rather than below them or behind a scrollbar. The `+ New` button in particular lands
+over the "Del" button, and the storage-hint path is painted across the chat list.
+
+Not caused by the I2 split, and confirmed so rather than assumed: a pristine `git
+archive HEAD` of the pre-split tree was extracted to a scratch folder, served on its
+own port, and screenshotted at the same viewport. The overlap is pixel-identical.
+`public/styles.css` and `public/index.html` are untouched by I2.
+
+The measurement: `#sidebar` computes `overflow-y: hidden`, and its `scrollHeight`
+equals its `clientHeight` (768) even though its children clearly need more. So the
+column is not growing to fit its content and is not offering to scroll either —
+the usual flexbox `min-height: auto` trap, where an overflowing flex child refuses
+to shrink and its siblings are laid out over it. It only shows on a window short
+enough that five model cards plus the prompt library do not fit, which is why a
+1080p desktop never sees it and a laptop at 768 always does.
+
+Out of scope for I2, which changed no CSS. Recorded so it is not rediscovered as a
+"the split broke the sidebar" panic next time somebody opens the app on a laptop.
+
+## E28. `I2-A3` makes the bare `node --test` run intermittently racy
+
+A side effect of finishing I2-A, and inherent to it rather than to how it was built.
+
+`I2-A3` proves a model added to `models.json` needs no source edit by writing a
+sixth model into the real repo-root file, spawning a process, and restoring the
+file. `node --test` runs test FILES in parallel, so for the ~250 ms that file holds
+six models, any other test process that happens to load `src/core/model-catalog.js`
+caches six. The one assertion that notices is `test/api.test.js`:
+
+```js
+assert.equal(body.models.length, 5);   // GET /api/state reports runtime, hardware and per-model fit
+```
+
+Measured: 3 collisions in 20 consecutive full-suite runs, all of them that test, and
+more likely when the machine is otherwise busy. Every implementation that satisfies
+A1-A3 has this property — the app has to read that file, and the test has to rewrite
+it — so it is not fixable by choosing a different loader design. Reading at import
+rather than per call does not change the odds either: it is one read against one
+window whichever moment it happens at.
+
+What WAS fixable, and is fixed: the file is written with a plain `writeFile`, which
+truncates before it writes, so a reader landing in the middle got zero bytes or half a
+document and threw at import — taking a whole test file down with it (`runtime.test.js`
+reported `# tests 1 / # fail 1` and its 15 tests vanished from the count). The loader
+now retries a failed parse a few times before giving up, which covers a window measured
+in microseconds while still failing loudly on a genuinely malformed file. With that in
+place the suite total is a stable 228 and only the count assertion can flap.
+
+The project's declared gates are unaffected, which is the reason this is recorded rather
+than escalated: `npm run test:core` (79/79) and `npm run test:ui` (8/8) do not run the
+acceptance suites, and CLAUDE.md already calls bare `npm test` "a progress reading, not a
+gate". Someone with the planner's authority could close it for good by having A3 write to
+a copy of the repo in a temp folder instead of to the live file.

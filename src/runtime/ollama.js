@@ -68,8 +68,10 @@ export function ollamaAdapter(config = {}) {
 
         const out = {};
         // Ollama 0.32+ streams reasoning out of band in message.thinking rather
-        // than as <think> tags inside content. Reading only content silently
-        // discarded every reasoning token.
+        // than as inline reasoning tags inside content. Reading only content
+        // silently discarded every reasoning token. Which delimiters, if any,
+        // mark reasoning is the facade's business — this adapter only says
+        // WHICH FIELD a delta arrived in and lets the facade decide.
         const thinking = frame.message?.thinking ?? '';
         const text = frame.message?.content ?? '';
         if (thinking) out.thinking = thinking;

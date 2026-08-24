@@ -13,7 +13,8 @@ Offline chat client for uncensored Qwen 3.5 GGUF models. Runs on Tommy's machine
    one-time downloader, and `scripts/verify-urls.mjs`, which HEADs the Hugging Face
    URLs the catalog claims. Preflight holds that list and FAILs on any other file.
    The check catches a scheme-less URL as well as an `https` one.
-3. **Model output never reaches `innerHTML`.** `public/render.js` parses the markdown
+3. **Model output never reaches `innerHTML`.** `public/render.js` — with its parser
+   internals under `public/render/`, which nothing else imports — parses the markdown
    the models write and builds every element itself from text nodes; no string from a
    model is ever handed to the DOM as markup, and it is the only module allowed to turn
    model output into DOM. An uncensored local model is untrusted input like any other:
@@ -47,7 +48,16 @@ them is hypothetical.
   contract suite in `test/chat-store.test.js`. Add a behaviour there, not to one adapter.
 - `ThinkStream` (`src/core/think-stream.js`) — pure. Holds back any suffix that could
   still become a tag, so tags split across chunks work. Do not "simplify" the holdback.
-- `src/api.js` is deliberately thin. Logic accumulating there is a smell; push it down.
+- `src/api.js` is deliberately thin: it builds the dependencies, concatenates the
+  route tables from `src/api/` and runs the match-parse-answer loop. Logic
+  accumulating in a route is a smell; push it down.
+- The models are DATA. `models.json` at the repo root holds all five;
+  `src/core/model-catalog.js` is the loader and holds no model id. Adding or
+  re-tuning a model is an edit to that file and nothing else.
+- The stream event names (`start`, `think`, `answer`, `stats`, `done`, `error`) are
+  defined once, in `public/shared/events.js`, and imported by both sides. It lives
+  under `public/` because that is the only folder the server serves, so it is the one
+  path a browser `<script type="module">` and a Node `import` can both reach.
 - `RuntimeSupervisor` (`src/core/runtime-supervisor.js`) starts Ollama with the env
   from `config.json` rather than an inherited one. That is deliberate and load-bearing:
   a stale environment block is why a model store on another drive goes unseen. The

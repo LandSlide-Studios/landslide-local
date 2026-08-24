@@ -81,7 +81,11 @@ test('I2-A3: a model added to the data file appears without touching source', as
       process.execPath,
       [
         '-e',
-        `import('${path.join(ROOT, 'src', 'core', 'model-catalog.js').replace(/\\/g, '/')}')` +
+        // file:/// is required: a Windows drive letter parses as a URL scheme and
+        // Node's ESM loader accepts only file:, data: and node:. I2-C1 fifty lines
+        // below gets this right; this line did not, so no implementation could ever
+        // have satisfied it.
+        `import('file:///${path.join(ROOT, 'src', 'core', 'model-catalog.js').replace(/\\/g, '/')}')` +
           `.then(m => console.log(m.all().map(x => x.id).join(',')))`,
       ],
       { encoding: 'utf8' },

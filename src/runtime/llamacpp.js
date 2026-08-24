@@ -72,9 +72,11 @@ export function llamaCppAdapter(config = {}) {
         const out = {};
         const delta = frame.choices?.[0]?.delta ?? {};
         // Reasoning arrives out of band on some builds. Pass it through as a
-        // typed field rather than re-wrapping it in literal <think> tags: one
-        // frame can carry BOTH fields (the old else-if dropped the answer), and
-        // reasoning containing the string "</think>" would corrupt the split.
+        // typed field rather than re-wrapping it in the delimiters the facade
+        // parses: one frame can carry BOTH fields (the old else-if dropped the
+        // answer), and reasoning that happened to contain a closing delimiter
+        // would corrupt the split. Separating reasoning from answer is the
+        // facade's single decision; an adapter carries protocol only.
         if (delta.reasoning_content) out.thinking = delta.reasoning_content;
         if (delta.content) out.text = delta.content;
 

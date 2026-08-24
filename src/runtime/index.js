@@ -17,6 +17,7 @@
  * separation, timing, token accounting, abort semantics — lives here once.
  */
 
+import { EVENT } from '../../public/shared/events.js';
 import { createThinkStream } from '../core/think-stream.js';
 import { KEEP_ALIVE } from '../core/model-catalog.js';
 import { ollamaAdapter } from './ollama.js';
@@ -80,7 +81,7 @@ export function createRuntime(runtimeConfig = {}) {
 
       const push = (events) => {
         for (const e of events) {
-          if (e.type === 'think') thinking += e.text;
+          if (e.type === EVENT.think) thinking += e.text;
           else answer += e.text;
           onEvent(e);
         }
@@ -93,7 +94,7 @@ export function createRuntime(runtimeConfig = {}) {
           if (delta.thinking) {
             if (firstTokenMs === null) firstTokenMs = Date.now() - started;
             tokens += 1;
-            push([{ type: 'think', text: delta.thinking }]);
+            push([{ type: EVENT.think, text: delta.thinking }]);
           }
           if (delta.text) {
             if (firstTokenMs === null) firstTokenMs = Date.now() - started;
@@ -123,7 +124,7 @@ export function createRuntime(runtimeConfig = {}) {
         promptTokens,
         tokensPerSecond: tokens > 0 && genMs > 0 ? Number(((tokens / genMs) * 1000).toFixed(1)) : 0,
       };
-      onEvent({ type: 'stats', stats });
+      onEvent({ type: EVENT.stats, stats });
 
       return { answer, thinking, stats, aborted };
     },
