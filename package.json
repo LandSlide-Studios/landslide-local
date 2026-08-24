@@ -17,7 +17,9 @@
     "restore": "node scripts/restore.mjs",
     "autostart": "node scripts/autostart.mjs",
     "test:acceptance": "node --test --test-force-exit \"test/acceptance/*.test.js\"",
+    "test:ui": "node --test --test-force-exit test/ui.test.js",
+    "verify-live": "node scripts/verify-live.mjs",
     "lock": "node scripts/acceptance-lock.mjs --verify",
-    "gates": "npm run lock && npm test && npm run preflight"
+    "gates": "npm run lock && npm run test:core && npm run test:ui && npm test && npm run preflight"
   }
 }

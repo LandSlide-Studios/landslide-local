@@ -62,9 +62,22 @@ const state = {
 
 /* ---------------- boot ---------------- */
 
-init().catch((err) => fail(`Could not start: ${err.message}`));
+/**
+ * In a browser this module still starts itself the moment it is imported — the
+ * `<script type="module">` at the end of index.html loads it after the elements
+ * above exist, exactly as before.
+ *
+ * There is no `window` under Node, and that is the whole point of the guard:
+ * `test/ui.test.js` builds a DOM from the real index.html, imports this file
+ * against it and calls `init()` itself, so a full send/stream/render cycle can
+ * be driven and awaited with no human and no browser present. Booting on import
+ * would leave that test racing a promise it has no handle on.
+ */
+if (typeof window !== 'undefined') {
+  init().catch((err) => fail(`Could not start: ${err.message}`));
+}
 
-async function init() {
+export async function init() {
   await loadState();
   await loadChats();
   wireEvents();
