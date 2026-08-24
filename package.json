@@ -13,6 +13,9 @@
     "test:core": "node --test --test-force-exit test/chat-store.test.js test/think-stream.test.js test/runtime.test.js test/api.test.js test/regression.test.js",
     "preflight": "node scripts/preflight.mjs",
     "fetch-models": "node scripts/fetch-models.mjs",
+    "backup": "node scripts/backup.mjs",
+    "restore": "node scripts/restore.mjs",
+    "autostart": "node scripts/autostart.mjs",
     "test:acceptance": "node --test --test-force-exit \"test/acceptance/*.test.js\"",
     "lock": "node scripts/acceptance-lock.mjs --verify",
     "gates": "npm run lock && npm test && npm run preflight"

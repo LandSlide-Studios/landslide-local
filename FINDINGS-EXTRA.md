@@ -111,3 +111,36 @@ answers 409. Before F9-C those buttons were live in the demo and loaded models
 into a real Ollama. Flagged only because the README's demo paragraph does not
 mention preload either way — nothing to correct, but the demo does look sparser
 than it did.
+
+## E11. I6-D1 passed before any guard existed, off a comment
+
+`I6-D1` walks `src/` and greps every `.js` for `unhandledRejection|uncaughtException`.
+`src/server.js` already carried the word in a prose comment explaining why
+`pipeline` replaced `.pipe()` — so the test reported green on the round it was
+written, with no handler anywhere in the process. It was the one of the ten that
+passed at the start of this item. A real guard is now installed in the entry
+block, so the assertion is true for the right reason, but the check cannot tell
+the difference between a handler and a sentence. Something like spawning
+`src/server.js`, planting a rejection and asserting the process is still
+answering would be real. Acceptance files are not the builder's to edit; this is
+for the planner.
+
+## E12. On Windows a SIGTERM from another process skips the shutdown handler
+
+The entry point logs `shutting down` on SIGINT/SIGTERM and flushes the log before
+exiting. Verified working under a real Ctrl+C path only: Node on Windows maps
+`child.kill('SIGTERM')` onto TerminateProcess, so a server killed by another
+process dies without running the handler and the line never appears. Pre-existing
+platform behaviour, not something this item changed — noted so nobody reads a
+missing `shutting down` line as a bug in the logger.
+
+## E13. `config.json` still pins `storage.chatsDir` to an absolute path
+
+`"chatsDir": "N:/landslide-local/chats"` resolves identically to the relative
+`"./chats"` for the real install, because `ROOT` *is* `N:\landslide-local`. The
+absolute form is what makes every git worktree of this repo read and write the
+one live chats folder — which is why the smoke tests in this round all used
+`LANDSLIDE_CHATS_DIR` to point somewhere else. Left alone deliberately: changing
+where chats live is not I6's call, and another builder is running against that
+folder right now. `storage.logFile` was added as `./logs/app.log` so at least the
+new path does not repeat it.

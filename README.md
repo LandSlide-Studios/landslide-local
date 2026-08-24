@@ -127,9 +127,83 @@ it took, time to first token, token count and tokens per second.
 |---|---|
 | Chats | `N:\landslide-local\chats` — one JSON file per conversation |
 | Models | `N:\models` |
+| Log | `logs\app.log` inside this folder |
+| Backups | `backups\` inside this folder, when you make one |
 
-Chat files are plain JSON. Back them up by copying the folder; delete one and it is
-gone. Nothing is written anywhere else.
+Chat files are plain JSON. Delete one and it is gone. Nothing is written anywhere else,
+and nothing leaves the machine.
+
+---
+
+## Reliability
+
+Three things that matter once you actually live in this app: it keeps a log, it can
+hand you your chats back, and it can start itself at login.
+
+### The log
+
+Every run appends to `logs\app.log` — startup, shutdown, failed requests, and anything
+that would otherwise have vanished with the console window. The path comes from
+`config.json`:
+
+```json
+{ "storage": { "logFile": "./logs/app.log" } }
+```
+
+It is relative on purpose, so it follows the folder if you move it to another drive.
+Set it to `""` to turn logging off entirely.
+
+The file cannot grow without bound. At 2 MB it rotates: `app.log` becomes `app.log.1`,
+`.1` becomes `.2`, and the fourth one is dropped. Three archives plus the active file
+is the whole footprint.
+
+Logging never takes the app down with it. If the path is unwritable — the drive filled
+up, or something is sitting where the file should be — the logger switches itself off
+and the app carries on. A log line is not worth losing a conversation over.
+
+The same reasoning is why the server installs `unhandledRejection` and
+`uncaughtException` handlers. Node's default is to exit on a stray rejection; here it
+gets written to the log and the session keeps going.
+
+### Backing up your chats
+
+```
+npm run backup                       creates backups\chats-<timestamp>.lsb
+npm run backup -- D:/keep/chats.lsb  writes exactly there
+```
+
+One file holds the whole chats folder, gzipped, with a SHA-256 of every file inside it.
+Copy it to a second drive and that is a real backup.
+
+```
+npm run restore -- backups\chats-2026-08-24T10-31-02.lsb
+npm run restore -- <archive> --into D:/somewhere    restore beside the live folder first
+npm run restore -- <archive> --force                write over a folder that is not empty
+```
+
+Restore checks every checksum in the archive *before* it writes anything. A truncated
+or edited archive is refused with the destination still empty — a half-restored chat
+folder is worse than no restore, because it looks like it worked. It also refuses a
+destination that already holds files unless you pass `--force`, so an old backup cannot
+land on top of a live folder by accident. Restoring into an empty folder to look first
+costs nothing.
+
+The archive format is a header plus the file bytes; there is no dependency involved and
+nothing to install to read it back.
+
+### Starting at login
+
+```
+npm run autostart              is it on?
+npm run autostart install
+npm run autostart uninstall
+```
+
+Install writes one file — `landslide-local.cmd` — into your own Startup folder
+(`%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup`). No registry key, no
+scheduled task, no administrator prompt. Deleting that file by hand is a complete
+uninstall, and `uninstall` removes it only if it is the file this app wrote, so a
+shortcut you put there yourself is never touched.
 
 ---
 

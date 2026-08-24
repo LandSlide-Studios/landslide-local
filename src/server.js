@@ -12,6 +12,7 @@ import { promises as fs, createReadStream } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
 import { pathToFileURL } from 'node:url';
 import { loadConfig, ROOT } from './util/config.js';
+import { createLogger } from './util/log.js';
 import { createJsonFileStore } from './core/chat-store.js';
 import { createRuntime } from './runtime/index.js';
 import { createApi } from './api.js';
@@ -33,6 +34,10 @@ export async function createServer(overrides = {}) {
   // Shallow-merging overrides drops sibling keys: {server:{port:0}} would lose
   // `host` and bind 0.0.0.0 on an app whose entire premise is loopback-only.
   const config = mergeConfig(loadConfig(), overrides);
+  const log = createLogger({
+    file: config.storage.logFile,
+    maxBytes: config.storage.logMaxBytes,
+  });
   const store = createJsonFileStore(config.storage.chatsDir);
   const runtime = createRuntime(config.runtime);
   const api = createApi({ store, runtime, config });
@@ -65,14 +70,17 @@ export async function createServer(overrides = {}) {
 
     try {
       if (await api(req, res, url)) return;
-      await serveStatic(req, res, url);
+      await serveStatic(req, res, url, log);
     } catch (err) {
+      // The only record of a 500 used to be the browser's network tab, which is
+      // gone the moment it is closed. The file is what makes a report actionable.
+      log.error('request failed', { method: req.method, path: url.pathname, message: err.message });
       if (!res.headersSent) res.writeHead(500, { 'content-type': 'text/plain' });
       res.end(`server error: ${err.message}`);
     }
   });
 
-  return { server, config, store, runtime };
+  return { server, config, store, runtime, log };
 }
 
 function mergeConfig(base, extra) {
@@ -103,7 +111,7 @@ function isLoopbackHost(host) {
   return LOOPBACK_NAMES.has(name);
 }
 
-async function serveStatic(req, res, url) {
+async function serveStatic(req, res, url, log) {
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     res.writeHead(405, { allow: 'GET, HEAD' }).end('method not allowed');
     return;
@@ -150,6 +158,7 @@ async function serveStatic(req, res, url) {
     if (!res.writableEnded) res.destroy();
     if (err?.code !== 'ERR_STREAM_PREMATURE_CLOSE') {
       console.error(`static read failed for ${path.basename(target)}: ${err.message}`);
+      log?.error('static read failed', { file: path.basename(target), message: err.message });
     }
   }
 }
@@ -163,8 +172,28 @@ async function serveStatic(req, res, url) {
 const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 
 if (isMain) {
-  const { server, config } = await createServer();
+  const { server, config, log } = await createServer();
   const { host, port } = config.server;
+
+  /**
+   * Top-level guards.
+   *
+   * Without these, one rejected promise anywhere — an aborted fetch to Ollama,
+   * a socket that went away mid-stream — takes the whole process down under
+   * Node's default behaviour, ending every open conversation with it and
+   * leaving nothing on disk to say why. A local single-user app should stay up
+   * and write the reason down instead. Both handlers log; neither exits.
+   */
+  process.on('unhandledRejection', (reason) => {
+    const err = reason instanceof Error ? reason : new Error(String(reason));
+    log.error('unhandled rejection', { message: err.message, stack: err.stack });
+    console.error(`  [warn] unhandled rejection: ${err.message} (logged to ${config.storage.logFile})`);
+  });
+
+  process.on('uncaughtException', (err) => {
+    log.error('uncaught exception', { message: err?.message ?? String(err), stack: err?.stack });
+    console.error(`  [warn] uncaught exception: ${err?.message ?? err} (logged to ${config.storage.logFile})`);
+  });
 
   server.on('error', (err) => {
     if (err.code === 'EADDRINUSE') {
@@ -182,12 +211,22 @@ if (isMain) {
     console.log(`  runtime  ${config.runtime.adapter}`);
     console.log(`  chats    ${config.storage.chatsDir}`);
     console.log(`  models   ${config.storage.modelsDir}`);
+    console.log(`  log      ${config.storage.logFile || 'off'}`);
     console.log(`\n  Ctrl+C to stop.\n`);
+    log.info('server started', {
+      host,
+      port,
+      adapter: config.runtime.adapter,
+      node: process.versions.node,
+      pid: process.pid,
+    });
   });
 
   for (const sig of ['SIGINT', 'SIGTERM']) {
     process.on(sig, () => {
-      server.close(() => process.exit(0));
+      log.info('shutting down', { signal: sig });
+      // Give the log a moment to reach disk, but never let it hold the exit.
+      log.flush().finally(() => server.close(() => process.exit(0)));
       setTimeout(() => process.exit(0), 2000).unref();
     });
   }

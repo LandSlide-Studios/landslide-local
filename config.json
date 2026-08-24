@@ -17,7 +17,8 @@
   },
   "storage": {
     "chatsDir": "N:/landslide-local/chats",
-    "modelsDir": "N:/models"
+    "modelsDir": "N:/models",
+    "logFile": "./logs/app.log"
   },
   "hardware": {
     "vramTotalGb": 8,

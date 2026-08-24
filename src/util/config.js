@@ -19,7 +19,14 @@ const DEFAULTS = {
     ollamaUrl: 'http://127.0.0.1:11434',
     llamaCppUrl: 'http://127.0.0.1:8080',
   },
-  storage: { chatsDir: './chats', modelsDir: './models' },
+  // logFile is relative on purpose: it resolves against the project root, so a
+  // copy of this folder on another drive logs next to itself with nothing to edit.
+  storage: {
+    chatsDir: './chats',
+    modelsDir: './models',
+    logFile: './logs/app.log',
+    logMaxBytes: 2 * 1024 * 1024,
+  },
   hardware: { vramTotalGb: 8, vramUsableGb: 6.65, label: 'local GPU' },
 };
 
@@ -47,9 +54,12 @@ export function loadConfig({ file = path.join(ROOT, 'config.json'), env = proces
   if (env.LANDSLIDE_ADAPTER) cfg.runtime.adapter = env.LANDSLIDE_ADAPTER;
   if (env.LANDSLIDE_CHATS_DIR) cfg.storage.chatsDir = env.LANDSLIDE_CHATS_DIR;
   if (env.LANDSLIDE_MODELS_DIR) cfg.storage.modelsDir = env.LANDSLIDE_MODELS_DIR;
+  if (env.LANDSLIDE_LOG_FILE) cfg.storage.logFile = env.LANDSLIDE_LOG_FILE;
 
   cfg.storage.chatsDir = resolveFrom(ROOT, cfg.storage.chatsDir);
   cfg.storage.modelsDir = resolveFrom(ROOT, cfg.storage.modelsDir);
+  // An empty logFile is a deliberate "log nowhere", not a path to the root.
+  cfg.storage.logFile = cfg.storage.logFile ? resolveFrom(ROOT, cfg.storage.logFile) : '';
 
   if (!Number.isFinite(cfg.server.port) || cfg.server.port < 1 || cfg.server.port > 65535) {
     throw new Error(`invalid server port: ${cfg.server.port}`);
