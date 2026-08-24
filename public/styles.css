@@ -847,6 +847,14 @@ button, input, textarea { font-family: inherit; font-size: inherit; color: inher
 }
 .composer:focus-within { border-color: var(--accent); box-shadow: var(--sh-lg); }
 
+/* While a file is over the box. Same treatment as focus, because it means the
+   same thing: this is where what you are carrying will land. */
+.composer.is-dropping {
+  border-color: var(--accent);
+  border-style: dashed;
+  background: var(--accent-light);
+}
+
 .prompt {
   display: block;
   width: 100%;
@@ -883,6 +891,8 @@ kbd {
 }
 .char-count { margin-left: 6px; }
 .char-count.is-long { color: var(--accent); font-weight: 500; }
+
+.model-hint { display: inline-flex; align-items: center; gap: 3px; }
 
 /* Quiet until it matters: amber as the window fills, accent once turns have
    actually been left out of the prompt. */

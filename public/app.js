@@ -31,10 +31,12 @@ import { branchFromMessage, newChat, regenerateReply, startNewChat } from './cha
 import { clearNotice, currentModel, els, mountDom, notify, state } from './dom.js';
 import { initAgainMenu } from './again-menu.js';
 import { initPreload } from './preload.js';
+import { initFileDrop } from './file-drop.js';
 import { initVram, renderVram } from './vram.js';
 import { buildMessage, updateChatActions } from './message-view.js';
 import {
   moveModelSelection,
+  selectModel,
   refreshRuntime,
   renderFacts,
   renderModels,
@@ -106,8 +108,35 @@ async function loadState() {
   // residency happened to move, which is the one case where it matters least.
   renderVram();
   renderFacts(data);
+  renderModelHint();
   els.storageHint.textContent = data.chatsDir;
   els.storageHint.title = data.chatsDir;
+}
+
+/**
+ * The keyboard hint for model switching, built from the catalog rather than
+ * written into the page. Hardcoding "Ctrl+1-5" is a claim about models.json,
+ * and models.json is a file the user is invited to edit.
+ */
+function renderModelHint() {
+  const n = Math.min(state.models.length, 9);
+  if (n < 2) {
+    els.modelHint.hidden = true;
+    return;
+  }
+  els.modelHint.hidden = false;
+  els.modelHint.replaceChildren();
+  const ctrl = document.createElement('kbd');
+  ctrl.textContent = 'Ctrl';
+  const first = document.createElement('kbd');
+  first.textContent = '1';
+  els.modelHint.append(ctrl, document.createTextNode('+'), first);
+  if (n > 1) {
+    const last = document.createElement('kbd');
+    last.textContent = String(n);
+    els.modelHint.append(document.createTextNode('–'), last);
+  }
+  els.modelHint.append(document.createTextNode(' model'));
 }
 
 /* ---------------- sending ---------------- */
@@ -211,6 +240,14 @@ function wireEvents() {
   // import the rail it redraws.
   initPreload({ onSettled: refreshRuntime });
   initVram({ onChanged: refreshRuntime });
+  // A dropped file lands in the composer like typing, so the two readings that
+  // follow typing have to follow it too.
+  initFileDrop({
+    onInserted: () => {
+      autoGrow();
+      updateCount();
+    },
+  });
 
   els.startRuntime.addEventListener('click', () => startRuntime());
   setInterval(() => {
@@ -236,6 +273,22 @@ function wireEvents() {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'n') {
       e.preventDefault();
       startNewChat();
+    }
+    // Ctrl+1..N picks a model. Matched on e.code, not e.key: the digit a key
+    // produces depends on the layout, the physical key does not, so this stays
+    // the top row of the keyboard everywhere.
+    //
+    // preventDefault matters more than usual here — Ctrl+1..8 switches browser
+    // tab in Chrome, and losing the window is a worse outcome than the shortcut
+    // simply not working.
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && /^Digit[1-9]$/.test(e.code)) {
+      const at = Number(e.code.slice(5)) - 1;
+      // Out of range does nothing AND does not swallow the keystroke: with three
+      // models loaded, Ctrl+4 should still be the browser's to handle.
+      if (at < state.models.length) {
+        e.preventDefault();
+        selectModel(state.models[at].id);
+      }
     }
     if (e.key === 'Escape' && state.busy) state.abort?.abort();
   });

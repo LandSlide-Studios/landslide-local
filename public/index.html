@@ -107,6 +107,9 @@
             <kbd>Enter</kbd> send
             <kbd>Shift</kbd>+<kbd>Enter</kbd> newline
             <kbd>Ctrl</kbd>+<kbd>K</kbd> search
+            <!-- Filled from the catalog: hardcoding "1-5" would be a lie the
+                 moment models.json holds a different number. -->
+            <span id="modelHint" class="model-hint" hidden></span>
             <span id="charCount" class="char-count"></span>
             <!-- Filled from the start event of every reply: what the last turn
                  actually cost against this model's window, and how many older

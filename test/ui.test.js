@@ -1398,3 +1398,145 @@ test('a resident model this build does not ship is shown but not offered for unl
     await stub.close();
   }
 });
+
+/* ------------------------------------------------------------------ */
+/* Ctrl+digit picks a model                                            */
+/* ------------------------------------------------------------------ */
+
+test('Ctrl+digit selects the model at that position and stops the browser taking the key', async () => {
+  const page = await mount({ script: SCRIPTED, delayMs: 4, chunkSize: 8 });
+  try {
+    const names = page.byId('modelList').querySelectorAll('.model').map((c) => c.querySelector('.model-name').textContent);
+    assert.ok(names.length >= 3, 'this test needs at least three models');
+    const active = () => page.byId('modelList').querySelector('.model.is-active').querySelector('.model-name').textContent;
+
+    const third = dispatch(page.document, makeEvent('keydown', { key: '3', code: 'Digit3', ctrlKey: true }));
+    assert.equal(active(), names[2], 'Ctrl+3 selects the third model in the rail');
+    assert.equal(third, false, 'and preventDefault must fire — Ctrl+1..8 switches browser tab in Chrome');
+
+    dispatch(page.document, makeEvent('keydown', { key: '1', code: 'Digit1', ctrlKey: true }));
+    assert.equal(active(), names[0]);
+
+    // Beyond the catalog: do nothing, and do not swallow the key either.
+    const beyond = dispatch(page.document, makeEvent('keydown', { key: '9', code: 'Digit9', ctrlKey: true }));
+    assert.equal(active(), names[0], 'a digit past the last model changes nothing');
+    assert.equal(beyond, true, 'and leaves the keystroke to the browser rather than eating it');
+
+    // Without Ctrl it is just typing.
+    dispatch(page.document, makeEvent('keydown', { key: '2', code: 'Digit2' }));
+    assert.equal(active(), names[0], 'a bare digit is a character, not a shortcut');
+  } finally {
+    await page.close();
+  }
+});
+
+test('the model shortcut hint counts the catalog rather than claiming a number', async () => {
+  const page = await mount({ script: SCRIPTED, delayMs: 4, chunkSize: 8 });
+  try {
+    const count = page.byId('modelList').querySelectorAll('.model').length;
+    const hint = page.byId('modelHint');
+    assert.equal(hint.hidden, false);
+    const digits = hint.querySelectorAll('kbd').map((k) => k.textContent);
+    assert.deepEqual(
+      digits,
+      ['Ctrl', '1', String(count)],
+      `the hint must name the real number of models; the catalog has ${count}`,
+    );
+  } finally {
+    await page.close();
+  }
+});
+
+/* ------------------------------------------------------------------ */
+/* Dropping a file on the composer                                     */
+/* ------------------------------------------------------------------ */
+
+/** Enough of a File for readDropped(): a name, a size, and the bytes. */
+const fakeFile = (name, bytes) => ({
+  name,
+  size: bytes.length,
+  arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+});
+const utf8 = (s) => new TextEncoder().encode(s);
+
+test('a dropped text file is read, and a binary one is refused with a reason', async () => {
+  const drop = await import('../public/file-drop.js');
+
+  const good = await drop.readDropped(fakeFile('notes.md', utf8('# Heading\n\nsome prose')));
+  assert.equal(good.ok, true);
+  assert.equal(good.text, '# Heading\n\nsome prose');
+
+  // A NUL byte is the oldest reliable "not text" signal and survives files that
+  // are valid UTF-8 by accident.
+  const binary = await drop.readDropped(fakeFile('model.gguf', new Uint8Array([0x47, 0x47, 0x55, 0x00, 0x01])));
+  assert.equal(binary.ok, false);
+  assert.match(binary.error, /binary/, 'and the reason names the file');
+  assert.match(binary.error, /model\.gguf/);
+
+  // Valid-looking bytes that are not valid UTF-8.
+  const mojibake = await drop.readDropped(fakeFile('latin1.txt', new Uint8Array([0xff, 0xfe, 0x41])));
+  assert.equal(mojibake.ok, false);
+  assert.match(mojibake.error, /UTF-8/);
+
+  const huge = await drop.readDropped({ name: 'big.log', size: drop.MAX_BYTES + 1, arrayBuffer: async () => new ArrayBuffer(0) });
+  assert.equal(huge.ok, false);
+  assert.match(
+    huge.error,
+    /just over the 256 KB limit/,
+    'one byte over must not read "is 256 KB; the limit is 256 KB", which looks like a bug',
+  );
+
+  const way = await drop.readDropped({ name: 'huge.log', size: 4.2 * 1024 ** 2, arrayBuffer: async () => new ArrayBuffer(0) });
+  assert.match(way.error, /4\.2 MB/, 'a file that is properly too big says how big');
+  assert.match(way.error, /256 KB/, 'alongside the limit it broke');
+});
+
+test('a fence is always longer than any backtick run inside the file', async () => {
+  const { fence } = await import('../public/file-drop.js');
+  assert.match(fence('a.md', 'no ticks'), /```\n/);
+  const nested = fence('a.md', 'a ``` fence inside');
+  assert.match(nested, /````\n/, 'three backticks inside means four outside, or the block closes early');
+  assert.match(fence('a.md', '`````'), /``````\n/);
+});
+
+test('dropping files puts their text in the composer, fenced and labelled', async () => {
+  const page = await mount({ script: SCRIPTED, delayMs: 4, chunkSize: 8 });
+  try {
+    const { insertFiles } = await import('../public/file-drop.js');
+    page.byId('prompt').value = 'what does this do?';
+
+    await insertFiles([
+      fakeFile('one.js', utf8('export const a = 1;')),
+      fakeFile('two.txt', utf8('plain words')),
+    ]);
+
+    const value = page.byId('prompt').value;
+    assert.match(value, /^what does this do\?/, 'what was already typed is kept, and kept first');
+    assert.ok(value.includes('one.js'), 'each file is labelled with its name');
+    assert.ok(value.includes('export const a = 1;'));
+    assert.ok(value.includes('two.txt'));
+    assert.ok(value.includes('plain words'));
+    assert.equal((value.match(/```/g) ?? []).length, 4, 'two files, two fences');
+
+    // It is text in the box, so it counts like text in the box — an attachment
+    // that silently ate two thirds of the window is the thing this avoids.
+    assert.match(page.byId('charCount').textContent, /\d/, 'the character count reflects it');
+  } finally {
+    await page.close();
+  }
+});
+
+test('a refused file inserts nothing and says why', async () => {
+  const page = await mount({ script: SCRIPTED, delayMs: 4, chunkSize: 8 });
+  try {
+    const { insertFiles } = await import('../public/file-drop.js');
+    page.byId('prompt').value = 'untouched';
+    await insertFiles([fakeFile('model.gguf', new Uint8Array([0x00, 0x01, 0x02]))]);
+
+    assert.equal(page.byId('prompt').value, 'untouched', 'nothing may be inserted');
+    assert.equal(page.byId('notice').hidden, false, 'and the refusal has to be visible');
+    assert.match(page.byId('noticeMsg').textContent, /model\.gguf/);
+  } finally {
+    await page.close();
+  }
+});

@@ -36,6 +36,7 @@ export function mountDom() {
   prompt: $('prompt'),
   send: $('send'),
   charCount: $('charCount'),
+  modelHint: $('modelHint'),
   statusBar: $('statusBar'),
   statusLabel: $('statusLabel'),
   statusMeta: $('statusMeta'),
