@@ -180,12 +180,15 @@ test('I2-D1: only the facade decides how reasoning is separated', async () => {
   }
 });
 
+// The runner exports NODE_TEST_CONTEXT=child-v8; a nested `node --test` inherits it
+// and emits the V8 stream instead of text, so its stdout is empty and no summary
+// can be read. Measured: 0 bytes inherited, 2087 bytes with it cleared.
 test('I2-D2: nothing regressed — the whole non-acceptance suite still passes', async () => {
   const { execFileSync } = await import('node:child_process');
   const out = execFileSync(
     process.execPath,
     ['--test', 'test/chat-store.test.js', 'test/think-stream.test.js', 'test/runtime.test.js', 'test/api.test.js', 'test/regression.test.js'],
-    { cwd: ROOT, encoding: 'utf8', timeout: 180_000 },
+    { cwd: ROOT, encoding: 'utf8', timeout: 180_000, env: { ...process.env, NODE_TEST_CONTEXT: undefined } },
   );
   const fails = /^# fail (\d+)$/m.exec(out);
   assert.equal(fails?.[1], '0', `existing tests must still pass:\n${out.slice(-1500)}`);

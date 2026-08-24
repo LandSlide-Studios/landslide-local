@@ -28,7 +28,7 @@ const run = (args, opts = {}) =>
     execFile(
       process.execPath,
       args,
-      { cwd: ROOT, encoding: 'utf8', timeout: 120_000, ...opts },
+      { cwd: ROOT, encoding: 'utf8', timeout: 120_000, env: { ...process.env, NODE_TEST_CONTEXT: undefined }, ...opts },
       (err, stdout, stderr) => resolve({ code: err?.code ?? 0, stdout, stderr }),
     );
   });
