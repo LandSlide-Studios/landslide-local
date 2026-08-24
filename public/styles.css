@@ -260,6 +260,34 @@ button, input, textarea { font-family: inherit; font-size: inherit; color: inher
 .fit-spills { color: #E08A6E; }
 .model.is-active .fit { color: var(--cream); }
 
+/* ---------- system prompt + prompt library ---------- */
+
+/* Same dark-panel treatment as .search, because it is the same kind of field
+   in the same sidebar — a second visual language here would read as a
+   different app bolted on. */
+.system-prompt {
+  width: 100%;
+  min-height: 62px;
+  max-height: 160px;
+  padding: 7px 9px;
+  background: rgba(237, 233, 225, 0.06);
+  border: 2px solid rgba(237, 233, 225, 0.28);
+  border-radius: var(--r);
+  color: var(--cream);
+  font-family: var(--font-body);
+  font-size: 12px;
+  line-height: 1.45;
+  resize: vertical;
+}
+.system-prompt::placeholder { color: rgba(237, 233, 225, 0.40); }
+.system-prompt:focus { outline: none; border-color: var(--accent); }
+
+.prompt-lib { display: flex; flex-direction: column; gap: 6px; }
+.prompt-lib .search { font-size: 12px; }
+.prompt-lib-row { display: flex; align-items: stretch; gap: 6px; }
+.prompt-lib-row .search { flex: 1; min-width: 0; }
+.prompt-lib-row .btn { flex: none; }
+
 /* ---------- search + chat list ---------- */
 
 .search {
@@ -651,6 +679,27 @@ kbd {
 }
 .char-count { margin-left: 6px; }
 .char-count.is-long { color: var(--accent); font-weight: 500; }
+
+/* Quiet until it matters: amber as the window fills, accent once turns have
+   actually been left out of the prompt. */
+.context-meter { margin-left: 6px; font-variant-numeric: tabular-nums; }
+.context-meter.is-tight { color: #A9761B; font-weight: 500; }
+.context-meter.is-trimmed { color: var(--accent); font-weight: 600; }
+
+.composer-actions { display: flex; align-items: center; gap: 8px; flex: none; }
+
+/* The Export control is an <a download> so the link works with no script at
+   all; these two rules are the only thing that makes it read as a button. */
+#exportChat {
+  display: inline-block;
+  text-decoration: none;
+  line-height: 1.35;
+}
+#exportChat[aria-disabled='true'] {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: none;
+}
 
 /* ---------- buttons ---------- */
 

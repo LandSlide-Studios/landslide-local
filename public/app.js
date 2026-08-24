@@ -41,12 +41,21 @@ const els = {
   notice: $('notice'),
   noticeMsg: $('noticeMsg'),
   noticeDismiss: $('noticeDismiss'),
+  systemPrompt: $('systemPrompt'),
+  promptLibrary: $('promptLibrary'),
+  promptName: $('promptName'),
+  savePrompt: $('savePrompt'),
+  deletePrompt: $('deletePrompt'),
+  contextMeter: $('contextMeter'),
+  exportChat: $('exportChat'),
+  regenerate: $('regenerate'),
   tpl: $('tpl-message'),
 };
 
 const state = {
   models: [],
   chats: [],
+  prompts: [],
   modelId: localStorage.getItem('ls.modelId') || null,
   chatId: null,
   busy: false,
@@ -58,6 +67,10 @@ const state = {
   abort: null,
   timerHandle: null,
   startedAt: 0,
+  // What the server was last told this chat's system prompt is. Without it
+  // every keystroke would be a PATCH, and every send would rewrite an
+  // unchanged field.
+  savedSystemPrompt: '',
 };
 
 /* ---------------- server access ---------------- */
@@ -201,8 +214,10 @@ if (typeof window !== 'undefined') {
 export async function init() {
   await loadState();
   await loadChats();
+  await loadPrompts();
   wireEvents();
   autoGrow();
+  updateChatActions();
 }
 
 async function loadState() {
@@ -491,7 +506,64 @@ function selectModel(id) {
       body: JSON.stringify({ modelId: id }),
     }).catch(() => {});
   }
+  preload(id);
   els.prompt.focus();
+}
+
+/**
+ * Start loading the model once the choice has settled.
+ *
+ * A 9B off this SATA SSD is about twenty seconds, and the old flow spent every
+ * one of them AFTER the first message was written — the one moment the user is
+ * watching. Choosing a model is the natural place to pay it instead.
+ *
+ * The delay is not politeness, it is the difference between this helping and
+ * this being unusable. Arrowing from the top of the list to the bottom passes
+ * over every model on the way, and firing on each one asks an 8 GB card to load
+ * five models back to back — the 21B alone locked the page for minutes when a
+ * stray click landed on it. Only where the selection comes to rest is loaded.
+ *
+ * Failures stay silent: the Preload button on the card is the deliberate
+ * version of this, and that one reports.
+ */
+const PRELOAD_SETTLE_MS = 400;
+let preloadTimer = null;
+
+function preload(id) {
+  clearTimeout(preloadTimer);
+  preloadTimer = null;
+  if (!state.runtimeUp || !state.canWarm || isResident(id)) return;
+  preloadTimer = setTimeout(() => {
+    preloadTimer = null;
+    // The selection may have moved on during the wait; only warm what is still
+    // chosen, or a fast pass through the list still loads something nobody wants.
+    if (state.modelId !== id) return;
+    apiFetch('/api/runtime/warm', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ modelId: id }),
+    })
+      .then(() => refreshRuntime())
+      .catch(() => {});
+  }, PRELOAD_SETTLE_MS);
+}
+
+/**
+ * Arrow keys inside the model list.
+ *
+ * It is a `role="radiogroup"`, and a radiogroup that only answers to clicks and
+ * Tab is a lie told to a screen reader: the pattern promises arrows move the
+ * selection. Selection is tracked in state rather than read off the focused
+ * node, because renderModels() rebuilds every card and the focused element is
+ * gone by the time the new one exists.
+ */
+function moveModelSelection(step) {
+  const ids = state.models.map((m) => m.id);
+  if (ids.length === 0) return;
+  const at = ids.indexOf(state.modelId);
+  const next = ids[(((at < 0 ? 0 : at) + step) % ids.length + ids.length) % ids.length];
+  selectModel(next);
+  els.modelList.children[ids.indexOf(next)]?.focus();
 }
 
 const currentModel = () => state.models.find((m) => m.id === state.modelId);
@@ -574,6 +646,11 @@ async function newChat() {
   }
   const { chat } = await res.json();
   state.chatId = chat.id;
+  // A fresh chat starts with no system prompt on the server. Whatever is in the
+  // box is kept — it is a working mode, not a per-chat accident — but it has to
+  // be re-sent, so the record of what the server knows resets with the chat.
+  state.savedSystemPrompt = '';
+  renderContext(null);
   await loadChats(els.chatSearch.value);
   renderThread(chat);
   els.prompt.focus();
@@ -601,6 +678,13 @@ async function openChat(id) {
     localStorage.setItem('ls.modelId', chat.modelId);
     renderModels();
   }
+  // The stored prompt is this chat's, not the last one's. Carrying the previous
+  // chat's steering into an old conversation would silently change what it is.
+  state.savedSystemPrompt = typeof chat.systemPrompt === 'string' ? chat.systemPrompt : '';
+  els.systemPrompt.value = state.savedSystemPrompt;
+  // The meter reports the last turn that was actually sent, and no turn has
+  // been sent in this chat yet this session.
+  renderContext(null);
   renderChats();
   renderThread(chat);
   els.prompt.focus();
@@ -616,8 +700,173 @@ async function deleteChat(id) {
     state.chatId = null;
     els.thread.replaceChildren(els.emptyState);
     els.emptyState.hidden = false;
+    renderContext(null);
   }
   await loadChats(els.chatSearch.value);
+  updateChatActions();
+}
+
+/* ---------------- system prompt + prompt library ---------------- */
+
+const systemPromptText = () => els.systemPrompt.value.trim();
+
+/**
+ * The prompt travels two ways on purpose: in the body of every send, so this
+ * turn is steered even if the write has not landed, and PATCHed onto the chat,
+ * so it is still there after a reload. Sending it only with the message would
+ * mean a system prompt that quietly evaporates on F5.
+ */
+async function saveSystemPrompt() {
+  if (!state.chatId) return;
+  const text = systemPromptText();
+  if (text === state.savedSystemPrompt) return;
+  state.savedSystemPrompt = text;
+  try {
+    await apiFetch(`/api/chats/${state.chatId}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ systemPrompt: text }),
+    });
+  } catch {
+    /* the send carries the same text anyway; this only affects the next reload */
+  }
+}
+
+async function loadPrompts() {
+  try {
+    const res = await apiFetch('/api/prompts');
+    state.prompts = res.ok ? ((await res.json()).prompts ?? []) : [];
+  } catch {
+    state.prompts = [];
+  }
+  renderPrompts();
+}
+
+function renderPrompts() {
+  const blank = document.createElement('option');
+  blank.value = '';
+  blank.textContent = state.prompts.length ? 'Load a saved prompt' : 'No saved prompts';
+  els.promptLibrary.replaceChildren(
+    blank,
+    ...state.prompts.map((p) => {
+      const option = document.createElement('option');
+      option.value = p.id;
+      option.textContent = p.name;
+      return option;
+    }),
+  );
+  els.promptLibrary.value = '';
+  els.deletePrompt.disabled = state.prompts.length === 0;
+}
+
+async function savePrompt() {
+  const text = systemPromptText();
+  if (!text) {
+    notify('Write a system prompt before saving it.');
+    return;
+  }
+  // A prompt with no name is unfindable in the list it was saved into, so one
+  // is derived rather than refused — the server would refuse it outright.
+  const name = els.promptName.value.trim() || text.replace(/\s+/g, ' ').slice(0, 40);
+  const res = await apiFetch('/api/prompts', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name, text }),
+  });
+  if (!res.ok) {
+    const payload = await res.json().catch(() => null);
+    notify(payload?.error ?? `could not save that prompt (server returned ${res.status})`);
+    return;
+  }
+  els.promptName.value = '';
+  clearNotice();
+  await loadPrompts();
+}
+
+async function deletePrompt() {
+  const id = els.promptLibrary.value;
+  if (!id) {
+    notify('Choose a saved prompt first, then Del removes it.');
+    return;
+  }
+  await apiFetch(`/api/prompts/${id}`, { method: 'DELETE' }).catch(() => {});
+  await loadPrompts();
+}
+
+function usePrompt() {
+  const found = state.prompts.find((p) => p.id === els.promptLibrary.value);
+  if (!found) return;
+  els.systemPrompt.value = found.text;
+  els.promptName.value = found.name;
+  saveSystemPrompt();
+}
+
+/* ---------------- context meter + chat actions ---------------- */
+
+/**
+ * What the last turn cost against the window.
+ *
+ * `trimmed` is the number that matters: above zero, turns were left out of
+ * what the model was shown. They are still on disk — this is a shorter view of
+ * the conversation, not a smaller conversation — but the user has to be told,
+ * because the alternative is a model that appears to have forgotten things for
+ * no reason anyone can see.
+ */
+function renderContext(context) {
+  if (!context || typeof context.estimatedTokens !== 'number') {
+    els.contextMeter.textContent = '';
+    els.contextMeter.classList.remove('is-tight');
+    els.contextMeter.classList.remove('is-trimmed');
+    return;
+  }
+  const used = context.estimatedTokens;
+  const limit = context.limitTokens || 0;
+  const dropped = context.trimmed || 0;
+  els.contextMeter.textContent =
+    `${used.toLocaleString()}/${limit.toLocaleString()} ctx` +
+    (dropped > 0 ? ` · ${dropped} dropped` : '');
+  els.contextMeter.title = dropped
+    ? `${dropped} of the oldest turns did not fit this model's window and were left out of the last reply. They are still saved in the chat.`
+    : `About ${used.toLocaleString()} of ${limit.toLocaleString()} tokens used by the last reply's prompt.`;
+  els.contextMeter.classList.toggle('is-tight', limit > 0 && used / limit >= 0.75);
+  els.contextMeter.classList.toggle('is-trimmed', dropped > 0);
+}
+
+const hasReply = () => Boolean(els.thread.querySelector('.msg-assistant'));
+
+/** Export and Again only mean anything with a chat, and Again needs a reply. */
+function updateChatActions() {
+  if (state.chatId) els.exportChat.setAttribute('href', `/api/chats/${state.chatId}/export?format=md`);
+  else els.exportChat.removeAttribute('href');
+  els.exportChat.setAttribute('aria-disabled', String(!state.chatId));
+  els.regenerate.disabled = !state.chatId || state.busy || !hasReply();
+}
+
+/**
+ * Replace the last reply rather than asking the same question twice.
+ *
+ * The node comes off the thread here and the server drops the message from the
+ * chat; the stream then writes a fresh one into the same place. Both halves or
+ * neither — leaving the old node on screen while the server replaced the record
+ * is how a thread starts disagreeing with what is on disk.
+ */
+async function regenerateReply() {
+  if (busyBlocks('Regenerating')) return;
+  if (!state.chatId) return;
+  const last = [...els.thread.querySelectorAll('.msg-assistant')].pop();
+  if (!last) {
+    notify('There is no reply to regenerate yet.');
+    return;
+  }
+  const model = currentModel();
+  state.busy = true;
+  els.thread.removeChild(last);
+  await saveSystemPrompt();
+  await streamReply({
+    path: `/api/chats/${state.chatId}/regenerate`,
+    payload: { modelId: model.id, systemPrompt: systemPromptText() },
+    model,
+  });
 }
 
 /* ---------------- thread rendering ---------------- */
@@ -627,11 +876,13 @@ function renderThread(chat) {
   if (chat.messages.length === 0) {
     els.emptyState.hidden = false;
     els.thread.append(els.emptyState);
+    updateChatActions();
     return;
   }
   for (const m of chat.messages) {
     els.thread.append(buildMessage(m.role, m.content, m.thinking, m.stats));
   }
+  updateChatActions();
   scrollToEnd();
 }
 
@@ -734,6 +985,23 @@ async function send(text) {
   if (els.thread.contains(els.emptyState)) els.thread.removeChild(els.emptyState);
 
   els.thread.append(buildMessage('user', text));
+  await saveSystemPrompt();
+  await streamReply({
+    path: `/api/chats/${state.chatId}/message`,
+    payload: { content: text, modelId: model.id, systemPrompt: systemPromptText() },
+    model,
+  });
+}
+
+/**
+ * One reply, streamed into a fresh assistant node.
+ *
+ * Both doors — a new message and a regenerate — come through here so they
+ * cannot drift apart: the same pending shell, the same abort handle, the same
+ * finally that gives the composer back whatever happened. The caller has
+ * already claimed `state.busy`.
+ */
+async function streamReply({ path, payload, model }) {
   const reply = buildMessage('assistant', '', '', null, { pending: true });
   const replyText = reply.querySelector('.msg-text');
   const think = reply.querySelector('.think');
@@ -753,11 +1021,11 @@ async function send(text) {
   let thinkStartedAt = performance.now();
 
   try {
-    const res = await apiFetch(`/api/chats/${state.chatId}/message`, {
+    const res = await apiFetch(path, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       signal: state.abort.signal,
-      body: JSON.stringify({ content: text, modelId: model.id }),
+      body: JSON.stringify(payload),
     });
 
     if (!res.ok) {
@@ -766,7 +1034,20 @@ async function send(text) {
     }
 
     for await (const event of sseEvents(res.body)) {
-      if (event.type === 'think') {
+      if (event.type === 'start') {
+        renderContext(event.context);
+        // The one thing this item exists to prevent: turns leaving the prompt
+        // without anybody being told. It goes in the notice bar, which survives
+        // every re-render, rather than anywhere that gets wiped.
+        const dropped = event.context?.trimmed ?? 0;
+        if (dropped > 0) {
+          notify(
+            `This conversation is past ${model.name}'s ${Number(event.context.limitTokens).toLocaleString()}-token window. ` +
+              `The ${dropped} oldest turn${dropped === 1 ? '' : 's'} ${dropped === 1 ? 'was' : 'were'} left out of this reply — ` +
+              'still saved in the chat, just not shown to the model.',
+          );
+        }
+      } else if (event.type === 'think') {
         reasoning += event.text;
         think.hidden = false;
         if (!sawAnswer) think.open = true; // watch it reason, then get out of the way
@@ -865,6 +1146,7 @@ function setBusy(busy, label = 'Thinking') {
   // ignored while a reply is streaming, it visibly cannot be pressed.
   els.newChat.disabled = busy;
   els.statusBar.hidden = !busy;
+  updateChatActions();
 
   if (busy) {
     els.statusLabel.textContent = label;
@@ -909,11 +1191,26 @@ function wireEvents() {
     updateCount();
   });
 
+  // `a` is in this list for the Export link: swallowing its mousedown would
+  // take focus off it, and a download link the keyboard cannot reach is the
+  // same defect this item is fixing everywhere else.
   els.composer.addEventListener('mousedown', (e) => {
-    if (e.target.closest('button, kbd, textarea')) return;
+    if (e.target.closest('button, kbd, textarea, a')) return;
     e.preventDefault();
     els.prompt.focus();
   });
+
+  els.modelList.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    e.preventDefault();
+    moveModelSelection(e.key === 'ArrowDown' ? 1 : -1);
+  });
+
+  els.systemPrompt.addEventListener('change', () => saveSystemPrompt());
+  els.promptLibrary.addEventListener('change', () => usePrompt());
+  els.savePrompt.addEventListener('click', () => savePrompt());
+  els.deletePrompt.addEventListener('click', () => deletePrompt());
+  els.regenerate.addEventListener('click', () => regenerateReply());
 
   els.startRuntime.addEventListener('click', () => startRuntime());
   setInterval(() => {

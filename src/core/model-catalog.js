@@ -247,6 +247,44 @@ export function optionsFor(model, asked = {}) {
   return out;
 }
 
+/**
+ * The strict door, for options being STORED rather than sent.
+ *
+ * `optionsFor` clamps, because a live request should still produce an answer.
+ * Persisting is different: a temperature of 99 saved onto a chat is silently
+ * rewritten to 2 on every send, and the settings panel then shows a number the
+ * model never sees. Refusing it once, at the point it is written, is the only
+ * moment the user is present to be told.
+ *
+ * @param {unknown} asked
+ * @returns {string[]} what is wrong with it; empty means fine
+ */
+export function checkOptions(asked) {
+  if (asked === null || typeof asked !== 'object' || Array.isArray(asked)) {
+    return ['options must be an object'];
+  }
+  const problems = [];
+  for (const [key, raw] of Object.entries(asked)) {
+    const limit = OPTION_LIMITS[key];
+    if (!limit) {
+      problems.push(`unknown option: ${key}`);
+      continue;
+    }
+    const n = Number(raw);
+    if (!Number.isFinite(n)) {
+      problems.push(`${key} must be a number`);
+      continue;
+    }
+    // The "no limit" sentinels are a legitimate way to ask for the maximum,
+    // and optionsFor already reads them as exactly that.
+    if (limit.unboundedMeansMax && n <= 0) continue;
+    if (n < limit.min || n > limit.max) {
+      problems.push(`${key} must be between ${limit.min} and ${limit.max} (got ${n})`);
+    }
+  }
+  return problems;
+}
+
 function clampOption(raw, limit) {
   const n = Number(raw);
   if (!Number.isFinite(n)) return null;

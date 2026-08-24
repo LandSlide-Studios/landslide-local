@@ -300,3 +300,61 @@ nothing said about why.
 
 It is now built out of DOM nodes in the existing notice bar. `alert` and
 `confirm` do not appear anywhere in `public/`, and should not start.
+
+---
+
+# Noticed while building I1
+
+## E22. The Export link cannot carry the bearer token
+
+`public/index.html` — `#exportChat` is an `<a href download>` rather than a
+scripted fetch, deliberately: the link works with no JavaScript, needs no
+browser-only global inside `app.js`, and the file lands wherever downloads go
+without the app touching Blob URLs.
+
+The cost is that a browser following an `<a href>` sends no `Authorization`
+header. Every other call the page makes goes through `apiFetch`, which adds one
+when `security.token` is set; this one does not. With a token configured, Export
+answers 401 and the user gets an error page instead of a file.
+
+`security.token` is empty by default and is opt-in, so this affects nobody today.
+The fix is either a fetch-plus-Blob download (which needs `URL.createObjectURL`,
+and a matching `revokeObjectURL`, both of which the UI test's DOM shim has no
+answer for) or letting the token ride in a one-shot query parameter, which puts
+a secret in a URL and is worse. Left as it is, and written down.
+
+## E23. The token estimate is never checked against the number the runner reports
+
+`src/core/context-budget.js` estimates; `stats.promptTokens` — Ollama's own
+`prompt_eval_count` — is the truth, and it is already flowing. The runtime facade
+reads it, the `done` event carries it, and `chat-store` saves it onto every
+assistant message. Nothing compares the two, ever.
+
+That matters because the whole budget rests on the heuristic erring HIGH. On the
+one live turn watched here the two agreed exactly — 30 estimated, 30 counted by
+auto-variable-2b — but that is a single sample of forty characters of English.
+The cases that would break it are long prompts, code, and non-Latin text, and if
+the estimate ever went under, nothing in this app would notice: it would simply
+go back to planning payloads that do not fit and letting the runner truncate
+them, which is the exact failure I1 exists to remove.
+
+The cheap version is a line in the log whenever `promptTokens` exceeds the
+estimate for that turn. It is a real signal, it costs nothing, and it turns "we
+believe this is conservative" into something measured.
+
+## E24. Selecting a model that does not fit commits the machine, with no warning
+
+Observed, not theorised: one click on **GLM-Flash Heretic** (21B, 7.32 GB, fit
+verdict `spills`) started a load that left the browser tab unable to answer for
+about three minutes.
+
+I1 added preload-on-select, and it now waits for the selection to settle so
+arrowing through the list does not load every model on the way past. That fixes
+the sweep. It does not fix the deliberate click: the app already knows this model
+does not fit — `catalog.fitFor` computes `spills`, and the card renders the word
+in amber right next to the name — and it starts the load anyway, with nothing
+asked and nothing to press to stop it.
+
+Somewhere between "confirm before preloading a model whose verdict is `spills`"
+and "never auto-preload one, leave it to the explicit Preload button" is the
+right answer. Both are one condition on the verdict the catalog already returns.

@@ -37,6 +37,24 @@
       <div id="modelList" class="model-list" role="radiogroup" aria-label="Choose a model"></div>
     </section>
 
+    <!-- The primary steering lever for an uncensored tune: without explicit
+         direction these models are documented as bland. The API always took a
+         system prompt; until now there was nowhere to type one. -->
+    <section class="panel">
+      <h2 class="panel-title">System prompt</h2>
+      <textarea id="systemPrompt" class="system-prompt" rows="3"
+        placeholder="Tell it who to be. Blank means no steering."
+        aria-label="System prompt for this chat"></textarea>
+      <div class="prompt-lib">
+        <select id="promptLibrary" class="search" aria-label="Saved prompts"></select>
+        <div class="prompt-lib-row">
+          <input id="promptName" class="search" type="text" placeholder="Save as" aria-label="Name for this prompt" />
+          <button id="savePrompt" class="btn btn-sm" type="button">Save</button>
+          <button id="deletePrompt" class="btn btn-sm" type="button" title="Delete the selected saved prompt">Del</button>
+        </div>
+      </div>
+    </section>
+
     <section class="panel panel-grow">
       <div class="panel-head">
         <h2 class="panel-title">Chats</h2>
@@ -79,8 +97,16 @@
             <kbd>Shift</kbd>+<kbd>Enter</kbd> newline
             <kbd>Ctrl</kbd>+<kbd>K</kbd> search
             <span id="charCount" class="char-count"></span>
+            <!-- Filled from the start event of every reply: what the last turn
+                 actually cost against this model's window, and how many older
+                 turns did not fit. -->
+            <span id="contextMeter" class="context-meter" title="Estimated context used against this model's window"></span>
           </div>
-          <button id="send" class="btn btn-accent" type="submit">Send</button>
+          <div class="composer-actions">
+            <a id="exportChat" class="btn btn-sm" download title="Download this chat as markdown">Export</a>
+            <button id="regenerate" class="btn btn-sm" type="button" title="Replace the last reply with a new one">Again</button>
+            <button id="send" class="btn btn-accent" type="submit">Send</button>
+          </div>
         </div>
       </form>
     </div>

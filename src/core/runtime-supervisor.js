@@ -6,6 +6,7 @@
  *   status()        -> Promise<{ running, version, loaded[], canStart, bin }>
  *   start()         -> Promise<{ ok, version?, tookMs, error? }>
  *   warm(modelId)   -> Promise<{ ok, tookMs, error? }>
+ *   unload(modelId) -> Promise<{ ok, tookMs, error? }>
  *
  * Two things make this worth a module rather than a shell command:
  *
@@ -212,6 +213,35 @@ export function createRuntimeSupervisor(runtimeConfig = {}) {
         return { ok: body.done === true, tookMs: Date.now() - began };
       } catch (err) {
         const msg = err?.name === 'TimeoutError' ? 'loading timed out' : String(err.message ?? err);
+        return { ok: false, tookMs: Date.now() - began, error: msg };
+      }
+    },
+
+    /**
+     * Give the VRAM back now rather than in `KEEP_ALIVE` minutes.
+     *
+     * On an 8 GB card a resident 9B is most of the card, and the next thing
+     * that needs it is usually not this app — a game, a render, the browser's
+     * own compositor. `keep_alive: 0` is the only thing Ollama treats as
+     * "evict it": a short duration merely re-arms the timer, and there is no
+     * unload endpoint to call instead.
+     */
+    async unload(modelId) {
+      const began = Date.now();
+      try {
+        const res = await fetch(`${base}/api/generate`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ model: modelId, prompt: '', keep_alive: 0 }),
+          signal: AbortSignal.timeout(30_000),
+        });
+        if (!res.ok) {
+          return { ok: false, tookMs: Date.now() - began, error: `runtime returned ${res.status}` };
+        }
+        const body = await res.json();
+        return { ok: body.done === true, tookMs: Date.now() - began };
+      } catch (err) {
+        const msg = err?.name === 'TimeoutError' ? 'unloading timed out' : String(err.message ?? err);
         return { ok: false, tookMs: Date.now() - began, error: msg };
       }
     },

@@ -5,32 +5,52 @@
  *
  * Routes:
  *   GET    /api/state                  runtime health + catalog + fit verdicts
+ *   POST   /api/runtime/unload         ask the runtime to give the VRAM back
  *   GET    /api/chats[?q=]             list or search
  *   POST   /api/chats                  create
  *   GET    /api/chats/:id              read
- *   PATCH  /api/chats/:id              rename / switch model
+ *   PATCH  /api/chats/:id              rename / model / system prompt / options
  *   DELETE /api/chats/:id              delete
+ *   GET    /api/chats/:id/export       the conversation as a file
  *   POST   /api/chats/:id/message      send + stream the reply over SSE
+ *   POST   /api/chats/:id/regenerate   replace the last reply, same SSE stream
+ *   GET    /api/prompts                the saved system prompts
+ *   POST   /api/prompts                save one
+ *   DELETE /api/prompts/:id            forget one
  */
 
 import * as catalog from './core/model-catalog.js';
 import { createRuntimeSupervisor } from './core/runtime-supervisor.js';
+import { budgetFor, planContext } from './core/context-budget.js';
+import { exportChat, isFormat } from './core/chat-export.js';
+import { createPromptLibrary, defaultPromptFile } from './core/prompt-library.js';
 
 const JSON_HEADERS = { 'content-type': 'application/json; charset=utf-8' };
 
-export function createApi({ store, runtime, config, supervisor }) {
+export function createApi({ store, runtime, config, supervisor, prompts }) {
   const boss = supervisor ?? createRuntimeSupervisor(config.runtime ?? {});
+  const library =
+    prompts ??
+    createPromptLibrary({
+      file: config.storage?.promptsFile || defaultPromptFile(config.storage.chatsDir),
+    });
   const routes = [
     ['GET', /^\/api\/runtime$/, runtimeStatus],
     ['POST', /^\/api\/runtime\/start$/, startRuntime],
     ['POST', /^\/api\/runtime\/warm$/, warmModel],
+    ['POST', /^\/api\/runtime\/unload$/, unloadModel],
     ['GET', /^\/api\/state$/, getState],
+    ['GET', /^\/api\/prompts$/, listPrompts],
+    ['POST', /^\/api\/prompts$/, createPrompt],
+    ['DELETE', /^\/api\/prompts\/([\w-]+)$/, deletePrompt],
     ['GET', /^\/api\/chats$/, listChats],
     ['POST', /^\/api\/chats$/, createChat],
     ['GET', /^\/api\/chats\/([\w-]+)$/, getChat],
     ['PATCH', /^\/api\/chats\/([\w-]+)$/, patchChat],
     ['DELETE', /^\/api\/chats\/([\w-]+)$/, deleteChat],
+    ['GET', /^\/api\/chats\/([\w-]+)\/export$/, getExport],
     ['POST', /^\/api\/chats\/([\w-]+)\/message$/, postMessage],
+    ['POST', /^\/api\/chats\/([\w-]+)\/regenerate$/, regenerate],
   ];
 
   /**
@@ -99,10 +119,27 @@ export function createApi({ store, runtime, config, supervisor }) {
     // Only a model this app ships may be preloaded; the id never reaches the
     // runtime unvalidated. A bad id is the caller's mistake whatever the backend
     // is, so it keeps answering 400 before the backend question is asked.
-    const model = catalog.get(body?.modelId);
-    if (!model) throw httpError(400, `unknown model: ${body?.modelId}`);
+    const model = requireModel(body?.modelId);
     await requireSupervised('preload a model');
     return { result: await boss.warm(model.id) };
+  }
+
+  /**
+   * The other half of preload. On an 8 GB card a resident 9B is most of the
+   * card, and waiting out KEEP_ALIVE is not a plan when the next thing that
+   * wants the GPU is already open. Same gate as warm: catalog id or nothing.
+   */
+  async function unloadModel(_m, body) {
+    const model = requireModel(body?.modelId);
+    await requireSupervised('unload a model');
+    return { result: await boss.unload(model.id) };
+  }
+
+  /** Nothing a request says becomes a model id — it names one, or it is refused. */
+  function requireModel(modelId) {
+    const model = catalog.get(modelId);
+    if (!model) throw httpError(400, `unknown model: ${modelId}`);
+    return model;
   }
 
   async function getState() {
@@ -138,27 +175,106 @@ export function createApi({ store, runtime, config, supervisor }) {
     return { chat };
   }
 
+  /**
+   * Generation options are checked here rather than clamped, because these are
+   * being WRITTEN. A stored temperature of 99 would be quietly rewritten to 2
+   * on every send, and the panel would go on showing a number no model ever
+   * sees — this is the one moment the user is present to be told otherwise.
+   */
   async function patchChat(match, body) {
-    return { chat: await store.updateChat(match[1], body ?? {}) };
+    const patch = body ?? {};
+    if ('options' in patch && patch.options !== null) {
+      const problems = catalog.checkOptions(patch.options);
+      if (problems.length > 0) throw httpError(400, problems.join('; '));
+    }
+    if ('systemPrompt' in patch && patch.systemPrompt !== null && typeof patch.systemPrompt !== 'string') {
+      throw httpError(400, 'systemPrompt must be a string');
+    }
+    return { chat: await store.updateChat(match[1], patch) };
   }
 
   async function deleteChat(match) {
     return { removed: await store.remove(match[1]) };
   }
 
+  /** A conversation as a file. Not JSON: the point is something to paste. */
+  async function getExport(match, _body, url, res) {
+    const format = url.searchParams.get('format') ?? 'md';
+    if (!isFormat(format)) throw httpError(400, `unsupported export format: ${format}`);
+    const chat = await store.get(match[1]);
+    if (!chat) throw httpError(404, 'chat not found');
+
+    const file = exportChat(chat, format);
+    const bytes = Buffer.from(file.body, 'utf8');
+    res.writeHead(200, {
+      'content-type': file.contentType,
+      'content-length': bytes.length,
+      'content-disposition': `attachment; filename="${file.filename}"`,
+    });
+    res.end(bytes);
+    return null;
+  }
+
+  /* ---------------- the prompt library ---------------- */
+
+  async function listPrompts() {
+    return { prompts: await library.list() };
+  }
+
+  async function createPrompt(_m, body) {
+    const prompt = await library.add(body);
+    if (!prompt) throw httpError(400, 'a saved prompt needs both a name and some text');
+    return { prompt };
+  }
+
+  async function deletePrompt(match) {
+    return { removed: await library.remove(match[1]) };
+  }
+
   /* Streaming reply. Returns a handler rather than a value. */
-  async function postMessage(match, body, _url, res, req) {
+  async function postMessage(match, body, _url, res) {
     const chatId = match[1];
     const text = String(body?.content ?? '').trim();
     if (!text) throw httpError(400, 'content is required');
-
-    const modelId = body?.modelId;
-    const model = catalog.get(modelId);
-    if (!model) throw httpError(400, `unknown model: ${modelId}`);
+    const model = requireModel(body?.modelId);
 
     let chat = await store.appendMessage(chatId, { role: 'user', content: text });
-    if (chat.modelId !== modelId) chat = await store.updateChat(chatId, { modelId });
+    if (chat.modelId !== model.id) chat = await store.updateChat(chatId, { modelId: model.id });
 
+    return streamReply({ chatId, chat, model, body, res });
+  }
+
+  /**
+   * Regenerate: the last reply is REPLACED, not answered a second time.
+   *
+   * Dropping it before generating is what makes that true, and it happens
+   * through the store so it takes the same per-chat lock every other write
+   * does. A chat whose last turn is the user's has no reply to replace, and
+   * saying so is a 400 rather than something to guess at.
+   */
+  async function regenerate(match, body, _url, res) {
+    const chatId = match[1];
+    const model = requireModel(body?.modelId);
+
+    const current = await store.get(chatId);
+    if (!current) throw httpError(404, 'chat not found');
+    if (current.messages.at(-1)?.role !== 'assistant') {
+      throw httpError(400, 'nothing to regenerate: this chat has no reply to replace');
+    }
+
+    let chat = await store.removeLastMessage(chatId);
+    if (chat.modelId !== model.id) chat = await store.updateChat(chatId, { modelId: model.id });
+
+    return streamReply({ chatId, chat, model, body, res });
+  }
+
+  /**
+   * One generation, from a chat that is already in the state it should be in.
+   * Both doors into the model come through here, so what reaches it — the
+   * budget, the system prompt, the options whitelist — cannot differ between
+   * sending and regenerating.
+   */
+  async function streamReply({ chatId, chat, model, body, res }) {
     const sse = openSse(res);
     const controller = new AbortController();
     // NOT req.on('close'): readJson has already consumed the request by this
@@ -169,9 +285,34 @@ export function createApi({ store, runtime, config, supervisor }) {
       if (!res.writableEnded) controller.abort();
     });
 
-    sse({ type: 'start', chatId, model: model.id, title: chat.title });
+    // The chat's own settings are the base; this request may move a knob for
+    // one turn. Both go through the catalog whitelist before a runtime sees them.
+    const options = catalog.optionsFor(model, { ...(chat.options ?? {}), ...(body?.options ?? {}) });
+    const systemPrompt = firstText(body?.systemPrompt, chat.systemPrompt);
+    const { limitTokens, reserveTokens } = budgetFor(options);
+    const plan = planContext({
+      messages: conversation(chat),
+      systemPrompt,
+      limitTokens,
+      reserveTokens,
+    });
 
-    const history = buildHistory(chat, body?.systemPrompt);
+    sse({
+      type: 'start',
+      chatId,
+      model: model.id,
+      title: chat.title,
+      // The whole point of the budget: what fits, what the window is, and how
+      // many turns did not make it — sent before a token is generated, so a
+      // truncated conversation is something the user is TOLD about rather than
+      // something they eventually notice the model forgetting.
+      context: {
+        estimatedTokens: plan.estimatedTokens,
+        limitTokens: plan.limitTokens,
+        trimmed: plan.trimmed,
+      },
+    });
+
     let result;
     try {
       result = await runtime.chat({
@@ -179,8 +320,8 @@ export function createApi({ store, runtime, config, supervisor }) {
         // meant any model in the registry — a 37 GiB one on an 8 GB card — was
         // one JSON field away.
         model: model.id,
-        messages: history,
-        options: catalog.optionsFor(model, body?.options),
+        messages: plan.messages,
+        options,
         signal: controller.signal,
         onEvent: (e) => sse(e),
       });
@@ -208,16 +349,24 @@ export function createApi({ store, runtime, config, supervisor }) {
     return null;
   }
 
-  function buildHistory(chat, systemPrompt) {
-    const msgs = [];
-    if (systemPrompt && String(systemPrompt).trim()) {
-      msgs.push({ role: 'system', content: String(systemPrompt).trim() });
+  /**
+   * The turns, and only the turns. A `system` message that ended up stored in
+   * the history is dropped here: the system prompt is a property of the chat
+   * now, and letting a second one ride along in the middle of the transcript
+   * is how models start arguing with their own instructions.
+   */
+  function conversation(chat) {
+    return chat.messages
+      .filter((m) => m.role !== 'system')
+      .map((m) => ({ role: m.role, content: m.content }));
+  }
+
+  /** The first of these that actually says something. */
+  function firstText(...values) {
+    for (const v of values) {
+      if (typeof v === 'string' && v.trim()) return v.trim();
     }
-    for (const m of chat.messages) {
-      if (m.role === 'system') continue;
-      msgs.push({ role: m.role, content: m.content });
-    }
-    return msgs;
+    return '';
   }
 
   /** @returns {boolean} true when this request was an API request and is handled. */

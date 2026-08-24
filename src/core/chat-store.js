@@ -10,7 +10,8 @@
  *   get(id)                       -> Promise<Chat | null>
  *   create({ title, modelId })    -> Promise<Chat>
  *   appendMessage(id, message)    -> Promise<Chat>
- *   updateChat(id, patch)         -> Promise<Chat>         title / modelId only
+ *   removeLastMessage(id)         -> Promise<Chat>         for regenerate
+ *   updateChat(id, patch)         -> Promise<Chat>         title / modelId / systemPrompt / options
  *   remove(id)                    -> Promise<boolean>
  *   search(query)                 -> Promise<ChatMeta[]>
  *
@@ -112,16 +113,33 @@ function previewOf(chat) {
  */
 const MAX_TITLE = 120;
 
+/**
+ * A system prompt is the one field here whose length has a cost per turn: it is
+ * re-sent with every message for the life of the chat, out of the same context
+ * window the conversation needs. Long enough to be a real brief, short enough
+ * that it cannot quietly eat the window on its own.
+ */
+const MAX_SYSTEM_PROMPT = 8000;
+
 function cleanTitle(value) {
   return typeof value === 'string' ? value.trim().slice(0, MAX_TITLE) : '';
 }
 
+/**
+ * Both new fields are present from birth rather than appearing on first patch.
+ * A chat that sometimes has a `systemPrompt` key and sometimes does not is a
+ * chat every reader has to guess about; the shape on disk stays one shape.
+ * Chats written before these existed simply read back as undefined, which every
+ * caller already treats as "none".
+ */
 function blankChat({ title, modelId }) {
   const ts = nowIso();
   return {
     id: newId(),
     title: cleanTitle(title) || 'New chat',
     modelId: modelId ?? null,
+    systemPrompt: '',
+    options: null,
     createdAt: ts,
     updatedAt: ts,
     messages: [],
@@ -165,11 +183,35 @@ function applyAppend(chat, message) {
   return next;
 }
 
+/**
+ * Regenerate needs the last reply gone before a new one is generated, or the
+ * chat grows a second answer to the same question every time the button is
+ * pressed. Dropping the tail is the store's business: it is a write, and the
+ * per-chat lock that makes concurrent writes safe lives here.
+ */
+function applyDropLast(chat) {
+  return { ...chat, messages: chat.messages.slice(0, -1), updatedAt: nowIso() };
+}
+
+/**
+ * Only the four fields a caller is allowed to move, and each with its own
+ * notion of "cleared". `null` clears; an absent key leaves what is there. A
+ * blanket merge would let any caller write over `messages` or `createdAt`.
+ */
 function applyPatch(chat, patch) {
   const next = { ...chat, updatedAt: nowIso() };
   const title = cleanTitle(patch.title);
   if (title) next.title = title;
   if (typeof patch.modelId === 'string' || patch.modelId === null) next.modelId = patch.modelId;
+  if (typeof patch.systemPrompt === 'string') {
+    next.systemPrompt = patch.systemPrompt.trim().slice(0, MAX_SYSTEM_PROMPT);
+  } else if (patch.systemPrompt === null) {
+    next.systemPrompt = '';
+  }
+  if (patch.options === null) next.options = null;
+  else if (patch.options && typeof patch.options === 'object' && !Array.isArray(patch.options)) {
+    next.options = { ...patch.options };
+  }
   return next;
 }
 
@@ -315,6 +357,15 @@ function createFileStore(dir, { ext, encode, decode, onDecodeError }) {
         const chat = await readOne(id);
         if (!chat) throw notFound(id);
         return writeAtomic(applyAppend(chat, message));
+      });
+    },
+    async removeLastMessage(id) {
+      assertId(id);
+      return withLock(id, async () => {
+        const chat = await readOne(id);
+        if (!chat) throw notFound(id);
+        if (chat.messages.length === 0) return chat;
+        return writeAtomic(applyDropLast(chat));
       });
     },
     async updateChat(id, patch = {}) {
@@ -467,6 +518,15 @@ export function createMemoryStore() {
       const chat = chats.get(id);
       if (!chat) throw notFound(id);
       const next = applyAppend(chat, message);
+      chats.set(id, next);
+      return structuredClone(next);
+    },
+    async removeLastMessage(id) {
+      assertId(id);
+      const chat = chats.get(id);
+      if (!chat) throw notFound(id);
+      if (chat.messages.length === 0) return structuredClone(chat);
+      const next = applyDropLast(chat);
       chats.set(id, next);
       return structuredClone(next);
     },
