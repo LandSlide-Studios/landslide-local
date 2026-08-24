@@ -310,7 +310,12 @@ async function refreshRuntime() {
       state.canWarm = runtime.canWarm === true;
     }
 
-    if (!wasUp && runtime.running) await loadChats(els.chatSearch.value);
+    // A runtime that has just come back has an empty VRAM whatever this page
+    // remembers loading into it.
+    if (!wasUp && runtime.running) {
+      forgetPreloads();
+      await loadChats(els.chatSearch.value);
+    }
   } catch {
     /* a failed poll is not worth surfacing */
   }
@@ -379,6 +384,7 @@ async function warmModel(id, button) {
     if (payload?.result?.ok) {
       clearNotice();
       button.textContent = 'Ready';
+      notePreloaded(id);
     } else {
       notify(`Could not preload ${name}: ${payload?.result?.error ?? 'the runtime did not load it'}`);
       button.textContent = 'Retry';
@@ -484,6 +490,9 @@ function selectModel(id) {
   state.modelId = id;
   localStorage.setItem('ls.modelId', id);
   renderModels();
+  // Start the load now, not on the first message. Silent, and a no-op on a
+  // runtime that cannot be preloaded — see preloadModel below.
+  preloadModel(id);
   if (state.chatId) {
     apiFetch(`/api/chats/${state.chatId}`, {
       method: 'PATCH',
@@ -492,6 +501,89 @@ function selectModel(id) {
     }).catch(() => {});
   }
   els.prompt.focus();
+}
+
+/**
+ * Load the model the user just picked, before they need it.
+ *
+ * Choosing a model used to cost nothing and the first message cost about twenty
+ * seconds, because that is when a 9B is read off the SSD. The load happens
+ * either way; this moves it to the click, while the user is still typing.
+ *
+ * It is the Preload button's request with the button taken away, which is what
+ * makes the three rules below rules rather than preferences:
+ *
+ * - **It never says anything.** Nobody asked for this request, so nothing it
+ *   does is worth an error bar. `POST /api/runtime/warm` answers 409 whenever
+ *   the configured adapter is not one the supervisor can drive, so under
+ *   llamacpp that would be an error on every single click of every model card,
+ *   for using the app exactly as intended. `state.canWarm` is the server's own
+ *   answer to whether this backend can be preloaded at all — the same flag that
+ *   hides the button — and anything that still goes wrong is swallowed.
+ * - **It never stacks.** One in flight at a time, and none at all for a model
+ *   already resident. Clicking through all five cards must not queue five model
+ *   loads onto a runtime that can only do one at a time anyway.
+ * - **It re-reads residency when it is done.** So the card gains "in VRAM" and
+ *   the sidebar tells the truth about what is loaded, which is also the first of
+ *   the two things that make a second selection of the same model free. The
+ *   second is `preloaded`, below.
+ */
+let preloading = false;
+const preloaded = new Set();
+
+function preloadModel(id) {
+  if (preloading || !id) return;
+  if (!state.runtimeUp || !state.canWarm) return;
+  if (preloaded.has(id) || isResident(id)) return;
+
+  preloading = true;
+  apiFetch('/api/runtime/warm', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ modelId: id }),
+  })
+    .then(async (res) => {
+      // Only a load that actually happened is worth remembering. A 409, a 401 or
+      // a runtime that refused leaves the id out, so selecting the card again
+      // tries once more rather than going quiet for the rest of the session.
+      const payload = res.ok ? await res.json().catch(() => null) : null;
+      if (payload?.result?.ok) notePreloaded(id);
+      return refreshRuntime();
+    })
+    .catch(() => {
+      /* An unasked-for preload has no failure the user needs to read. */
+    })
+    .finally(() => {
+      preloading = false;
+      // Clicking through the cards is faster than loading one, so by the time
+      // this finishes the selection has often moved on. Chase the CURRENT
+      // selection, never a queue of everything clicked past: five model loads
+      // nobody chose is precisely the pile-up this is avoiding. It cannot
+      // recurse — the follow-up only fires for a DIFFERENT id, so the chain
+      // ends the moment it catches up with the user.
+      if (state.modelId && state.modelId !== id) preloadModel(state.modelId);
+    });
+}
+
+/**
+ * `isResident()` is the better answer and is not always available: it is read
+ * from the runtime's own residency list, and a runtime that does not report one
+ * would leave every re-selection of the same card firing another load. This is
+ * the page's own memory of what it put there, and it is only ever cleared by
+ * `forgetPreloads()` when the runtime restarts and VRAM is genuinely empty.
+ *
+ * What it deliberately does not model is the thirty-minute eviction: a model
+ * that ages out is not preloaded again by re-selecting it. The card stops saying
+ * "in VRAM" when that happens, the Preload button comes back, and the next
+ * message reloads it regardless — so the cost of being wrong here is one first
+ * message at full load time, which is where this started.
+ */
+function notePreloaded(id) {
+  preloaded.add(id);
+}
+
+function forgetPreloads() {
+  preloaded.clear();
 }
 
 const currentModel = () => state.models.find((m) => m.id === state.modelId);

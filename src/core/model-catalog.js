@@ -45,6 +45,13 @@ const OPTION_LIMITS = Object.freeze({
   repeat_penalty: { min: 0.1, max: 2 },
   num_ctx: { min: 256, max: 262144, integer: true },
   num_predict: { min: 1, max: 32768, integer: true, unboundedMeansMax: true },
+  // How many prompt tokens are evaluated in one pass. Bigger reads a long
+  // prompt faster and costs more VRAM for the compute buffer, so the right
+  // value is a fact about the model's size on THIS card, not a constant.
+  // Ollama's own default is 512; the ceiling is llama.cpp's default logical
+  // batch, and the floor is low enough to survive a heavy spill to system RAM
+  // without being so low that prompt processing collapses.
+  num_batch: { min: 32, max: 2048, integer: true },
 });
 
 /**
@@ -71,6 +78,42 @@ const FORMAT = Object.freeze({
   prose: { profile: 'prose', tables: true, listsInterruptParagraph: false, indentPerLevel: 4 },
 });
 
+/**
+ * `num_batch` per model — how many prompt tokens are evaluated in one pass.
+ *
+ * These are MEASURED on this machine, not reasoned about, because reasoning
+ * about them got the 21B wrong by 45%. Prompt-eval throughput on a 2,781-token
+ * prompt, warm model, no reload (`prompt_eval_count / prompt_eval_duration`):
+ *
+ *              256      512     1024     2048   tok/s
+ *   2B        5,661    6,006   *6,382*   6,108
+ *   4B        3,222   *3,425*   3,391    3,375
+ *   9B inst   2,264   *2,423*   2,418    2,400
+ *   9B GAIN   2,065   *2,428*   2,311    2,273
+ *   21B         434      536   *  630*     632
+ *
+ * So: 1024 for the 2B and the 21B, 512 for the rest. Two shapes of answer, and
+ * neither is "more VRAM headroom means a bigger batch":
+ *
+ * - Three of the four that fit on the card peak at 512 and get *slower* above
+ *   it. The compute buffer a larger batch needs competes with the weights and
+ *   the KV cache for the same 6.65 GB, and past 512 it costs more than the
+ *   extra parallelism returns. 4B at 1024 is within noise of its 512; 512 is
+ *   both the measured peak and the smaller allocation, so it takes it.
+ * - The 21B wants MORE, monotonically to 1024 — 630 tok/s against 434 at the
+ *   256 that seemed obvious for a model already 1.5 GB over the card. It is not
+ *   competing for VRAM in the same way: layers are on the CPU either way, and a
+ *   bigger batch amortises that pass instead of aggravating it. 2048 is flat
+ *   (632), so 1024 is the knee, not a ceiling being avoided.
+ * - The 2B, with the most room and the smallest weights, is the only fitting
+ *   model that still gains at 1024 (6,382 against 6,006).
+ *
+ * Generation speed is untouched by all of this — it is a prompt-processing
+ * knob, and tok/s during generation stayed flat for every model at every value.
+ *
+ * A value here is only real if it is also whitelisted in OPTION_LIMITS and
+ * mapped by the adapter. An option that no adapter forwards is decoration.
+ */
 /** @type {ReadonlyArray<Model>} */
 const MODELS = Object.freeze([
   {
@@ -85,7 +128,7 @@ const MODELS = Object.freeze([
     thinks: true,
     uncensored: true,
     accent: 'ember',
-    defaults: { temperature: 0.7, top_p: 0.9, top_k: 40, repeat_penalty: 1.0, num_ctx: 16384 },
+    defaults: { temperature: 0.7, top_p: 0.9, top_k: 40, repeat_penalty: 1.0, num_ctx: 16384, num_batch: 512 },
     format: FORMAT.structured,
     blurb:
       'GAIN training adapts per-sample during the run; the author claims it beats the 27B. ' +
@@ -103,7 +146,7 @@ const MODELS = Object.freeze([
     thinks: false,
     uncensored: true,
     accent: 'ember',
-    defaults: { temperature: 0.7, top_p: 0.9, top_k: 40, repeat_penalty: 1.0, num_ctx: 16384 },
+    defaults: { temperature: 0.7, top_p: 0.9, top_k: 40, repeat_penalty: 1.0, num_ctx: 16384, num_batch: 512 },
     format: FORMAT.structured,
     blurb:
       'Same Claude 4.6 four-dataset tune as the thinking models with the reasoning block removed. ' +
@@ -121,7 +164,7 @@ const MODELS = Object.freeze([
     thinks: true,
     uncensored: true,
     accent: 'slate',
-    defaults: { temperature: 0.6, top_p: 0.9, top_k: 40, repeat_penalty: 1.0, num_ctx: 8192 },
+    defaults: { temperature: 0.6, top_p: 0.9, top_k: 40, repeat_penalty: 1.0, num_ctx: 8192, num_batch: 1024 },
     format: FORMAT.reasoning,
     blurb:
       'Qwen 3.5 27B contracted to 21B, then GLM 4.7 Flash tuned to shorten reasoning. ' +
@@ -139,7 +182,7 @@ const MODELS = Object.freeze([
     thinks: true,
     uncensored: true,
     accent: 'moss',
-    defaults: { temperature: 0.85, top_p: 0.92, top_k: 50, repeat_penalty: 1.0, num_ctx: 16384 },
+    defaults: { temperature: 0.85, top_p: 0.92, top_k: 50, repeat_penalty: 1.0, num_ctx: 16384, num_batch: 512 },
     format: FORMAT.prose,
     blurb:
       "DavidAU's character, POV and observation datasets at a size that leaves 4GB of VRAM spare. " +
@@ -157,7 +200,7 @@ const MODELS = Object.freeze([
     thinks: true,
     uncensored: true,
     accent: 'moss',
-    defaults: { temperature: 0.8, top_p: 0.9, top_k: 40, repeat_penalty: 1.0, num_ctx: 16384 },
+    defaults: { temperature: 0.8, top_p: 0.9, top_k: 40, repeat_penalty: 1.0, num_ctx: 16384, num_batch: 1024 },
     format: FORMAT.reasoning,
     blurb:
       'Reasoning length scales itself down on easy prompts, so it rarely stalls. ' +

@@ -300,3 +300,82 @@ nothing said about why.
 
 It is now built out of DOM nodes in the existing notice bar. `alert` and
 `confirm` do not appear anywhere in `public/`, and should not start.
+
+## E22. The queue's "MTP path" names builds this repo has never heard of
+
+I5's queue line in `PLAN.md` asks for a "documented llama.cpp/MTP path", and the
+brief for it named multi-token prediction "on the Defiant Fable builds". That
+string appears nowhere in this repository: not in `src/core/model-catalog.js`,
+which is the only list of models the app has, not in `README.md`, and not in any
+script. The five bundled quants are DavidAU and mradermacher builds of Qwen 3.5,
+and nothing on disk records whether any of them carries an MTP head.
+
+So the README section now documents the capability, which is real and is genuinely
+llama.cpp-only — an MTP head decoded natively, or `--model-draft` speculative
+decoding — and states plainly that **which of the bundled quants qualify has not
+been checked**, rather than asserting a speed-up for a model family that cannot be
+found here. `llama-server` prints what a GGUF carries when it loads it, so the
+check costs one run.
+
+Two ways to close it, neither in scope for I5: confirm the naming with whoever
+wrote the queue line and add the family to the catalog if it is meant to ship, or
+run `llama-server` once against each of the five files and record the answer in
+`README.md` beside the measured tok/s table, where every other performance claim
+in this project already lives.
+
+## E23. `num_batch` reaches Ollama and stops at llama.cpp, by design
+
+Added in I5: every catalog model declares `num_batch`, it is whitelisted and clamped
+in `optionsFor()` (32-2048), and `src/runtime/ollama.js` forwards it beside `num_ctx`.
+
+Two things about Ollama 0.32.15 that were confirmed by probing it directly, because
+neither is documented and the first one is a trap:
+
+1. **Sending `num_batch` inconsistently forces a reload.** Repeating an identical
+   options object is instant (5-8ms, no reload). *Dropping* `num_batch` from a
+   subsequent request after having sent it reloads the model — 6.9 seconds on a
+   1.19 GB 2B. So it joins `num_ctx` in the set of fields the preload and the first
+   message must both name identically or the preload buys nothing, which is exactly
+   the I0 finding repeating itself one field along. Both come from
+   `catalog.optionsFor()`, so they cannot drift.
+2. **It is honoured, and the effect is only on prompt processing.** Measured at
+   3,303 tok/s (num_batch 32) against 6,382 (1024) on the 2B, and 300 against 630 on
+   the 21B. Generation tok/s is flat at every value for every model.
+
+Measuring it needs care: change `num_batch` between two runs and Ollama reloads, so
+first-token time becomes load time and swamps the thing being measured. The first
+A/B run for this item read as "no difference at all" for exactly that reason. Warm at
+the target value twice, confirm the second warm returns in single-digit ms, then
+measure. Re-running the *same* value across processes has the opposite problem: the
+prompt KV cache survives and reports a fictional 5,438 tok/s.
+
+`src/runtime/llamacpp.js` does not forward it and should not: on `llama-server` the
+batch size is a startup flag (`-b` / `-ub`), not a field on `/v1/chat/completions`.
+`num_ctx` is already in that position (`-c`) and has never been forwarded either.
+
+The consequence is worth writing down because it is invisible: **under llamacpp the
+catalog's per-model tuning is inert**, and what applies is whatever `llama-server` was
+launched with. That is in the README's "What you lose" list. The real fix, if the
+llama.cpp path ever becomes the default, is for the app to launch `llama-server` per
+model the way `RuntimeSupervisor` launches Ollama — at which point the catalog's
+numbers become command-line arguments and start mattering again.
+
+## E24. The headroom theory for `num_batch` was wrong, and only measuring caught it
+
+Worth recording as a method note rather than a defect. The first values committed for
+`num_batch` came from a rule that sounded right: more spare VRAM means a bigger batch
+is affordable, so scale it with the headroom `fitFor()` reports. It gave 1024 to the
+2B and 4B, 512 to the 9Bs, and 256 to the 21B "because it is already 1.5 GB over the
+card and a smaller batch keeps the compute buffer off the GPU's back".
+
+The 21B measures 434 tok/s at 256 and 630 at 1024. The rule had it backwards for the
+one model where it mattered most, and by 45%. A model whose layers are on the CPU
+regardless is not competing for the compute buffer in the way a model that fits is;
+a bigger batch amortises the CPU pass rather than aggravating it. The 4B was wrong the
+other way, though only within noise.
+
+Three of five values survived contact with the measurement. That ratio is the point:
+this is a repository whose README already says "measured on this machine, not
+estimated", and a plausible mechanism produced a number that was confidently and
+badly wrong. Anything added to `defaults` that claims a performance effect should
+arrive with the numbers, and the harness for taking them is four dozen lines.
