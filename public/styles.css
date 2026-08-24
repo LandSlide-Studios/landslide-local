@@ -156,6 +156,12 @@ button, input, textarea { font-family: inherit; font-size: inherit; color: inher
 }
 .notice-x:hover { color: var(--cream); }
 
+/* The token prompt, when security.token is set and this browser has none yet. */
+.notice-ask { display: flex; flex: 1; flex-direction: column; gap: 6px; }
+.notice-ask .notice-msg { flex: none; }
+.notice-ask .search { font-size: 12px; }
+.notice-ask .btn { align-self: flex-start; }
+
 .model-resident {
   margin-left: auto;
   padding: 1px 5px;

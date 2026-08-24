@@ -36,7 +36,7 @@
 import { pathToFileURL } from 'node:url';
 import { loadConfig } from '../util/config.js';
 import * as catalog from '../core/model-catalog.js';
-import { createJsonFileStore } from '../core/chat-store.js';
+import { openChatStore } from '../core/store-open.js';
 import { createRuntime } from '../runtime/index.js';
 
 const SERVER_NAME = 'landslide-local';
@@ -73,7 +73,10 @@ const DEFAULT_MODEL_ID = 'heretic-instruct-9b';
 const MODEL_IDS = catalog.all().map((m) => m.id);
 
 const config = loadConfig();
-const store = createJsonFileStore(config.storage.chatsDir);
+// Same folder as the app, so the same decision about how to read it. Two copies
+// of that decision is how search_chats ends up reporting an empty history out of
+// a folder the app is happily writing encrypted.
+const { store, encrypted } = openChatStore(config);
 const runtime = createRuntime(config.runtime);
 
 /* ------------------------------------------------------------------ */
@@ -475,7 +478,7 @@ function start() {
 
   note(
     `${SERVER_NAME} ${SERVER_VERSION} on stdio — adapter ${config.runtime.adapter}, ` +
-      `chats ${config.storage.chatsDir}`,
+      `chats ${config.storage.chatsDir}${encrypted ? ' (encrypted)' : ''}`,
   );
 }
 

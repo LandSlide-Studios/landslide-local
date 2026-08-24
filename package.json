@@ -14,6 +14,7 @@
     "preflight": "node scripts/preflight.mjs",
     "fetch-models": "node scripts/fetch-models.mjs",
     "backup": "node scripts/backup.mjs",
+    "encrypt-chats": "node scripts/encrypt-chats.mjs",
     "restore": "node scripts/restore.mjs",
     "autostart": "node scripts/autostart.mjs",
     "test:acceptance": "node --test --test-force-exit \"test/acceptance/*.test.js\"",

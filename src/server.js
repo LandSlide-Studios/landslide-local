@@ -8,12 +8,13 @@
 
 import http from 'node:http';
 import path from 'node:path';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { promises as fs, createReadStream } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
 import { pathToFileURL } from 'node:url';
 import { loadConfig, ROOT } from './util/config.js';
 import { createLogger } from './util/log.js';
-import { createJsonFileStore } from './core/chat-store.js';
+import { countPlaintextChats, openChatStore } from './core/store-open.js';
 import { createRuntime } from './runtime/index.js';
 import { createApi } from './api.js';
 
@@ -38,9 +39,10 @@ export async function createServer(overrides = {}) {
     file: config.storage.logFile,
     maxBytes: config.storage.logMaxBytes,
   });
-  const store = createJsonFileStore(config.storage.chatsDir);
+  const { store, encrypted } = openChatStore(config);
   const runtime = createRuntime(config.runtime);
   const api = createApi({ store, runtime, config });
+  const authorised = createTokenGate(config);
 
   const server = http.createServer(async (req, res) => {
     let url;
@@ -68,6 +70,18 @@ export async function createServer(overrides = {}) {
       return;
     }
 
+    // The third admission check, and the only optional one. It covers /api/
+    // and not the shell: the page has to load for a token to be typed into it,
+    // and everything worth protecting is behind the API anyway.
+    if (url.pathname.startsWith('/api/') && !authorised(req)) {
+      res.writeHead(401, {
+        'www-authenticate': 'Bearer realm="landslide-local"',
+        'content-type': 'application/json; charset=utf-8',
+      });
+      res.end(JSON.stringify({ error: 'authentication required' }));
+      return;
+    }
+
     try {
       if (await api(req, res, url)) return;
       await serveStatic(req, res, url, log);
@@ -80,7 +94,49 @@ export async function createServer(overrides = {}) {
     }
   });
 
-  return { server, config, store, runtime, log };
+  return { server, config, store, runtime, log, encrypted };
+}
+
+/* ------------------------------------------------------------------ */
+/* Admission: the optional bearer token                                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * What this is for, and what it is not.
+ *
+ * The server already answers only to loopback, so the caller is always another
+ * process on this machine. The token separates "the browser the user opened"
+ * from "anything else running under this account" — a script, an extension's
+ * helper, a stray dev server probing 4390. That is the whole of it.
+ *
+ * It is NOT protection from somebody sitting at this keyboard, who can read
+ * config.json, and it is not a login: there is one secret, no accounts, and no
+ * session. With no token configured nothing changes, which is the default.
+ *
+ * @returns {(req: import('node:http').IncomingMessage) => boolean}
+ */
+function createTokenGate(config) {
+  const expected = String(config.security?.token ?? '').trim();
+  if (!expected) return () => true; // opt-in, and off unless asked for
+
+  const wanted = digest(expected);
+  return (req) => {
+    const presented = /^Bearer\s+(.+)$/i.exec(String(req.headers.authorization ?? '').trim());
+    if (!presented) return false;
+    return timingSafeEqual(wanted, digest(presented[1].trim()));
+  };
+}
+
+/**
+ * Compare fixed-width digests rather than the secrets themselves.
+ *
+ * timingSafeEqual throws outright on a length mismatch, so comparing the raw
+ * strings would need a length check first — and that check is itself the leak,
+ * answering "how long is the token" one guess at a time. Two SHA-256 digests are
+ * always 32 bytes, so every wrong answer takes exactly the same path.
+ */
+function digest(secret) {
+  return createHash('sha256').update(String(secret), 'utf8').digest();
 }
 
 function mergeConfig(base, extra) {
@@ -172,7 +228,7 @@ async function serveStatic(req, res, url, log) {
 const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 
 if (isMain) {
-  const { server, config, log } = await createServer();
+  const { server, config, log, encrypted } = await createServer();
   const { host, port } = config.server;
 
   /**
@@ -204,14 +260,15 @@ if (isMain) {
     throw err;
   });
 
-  server.listen(port, host, () => {
+  server.listen(port, host, async () => {
     console.log(`\n  Landslide Local`);
     console.log(`  ---------------`);
     console.log(`  UI       http://${host}:${port}`);
     console.log(`  runtime  ${config.runtime.adapter}`);
-    console.log(`  chats    ${config.storage.chatsDir}`);
+    console.log(`  chats    ${config.storage.chatsDir}${encrypted ? '  (encrypted)' : ''}`);
     console.log(`  models   ${config.storage.modelsDir}`);
     console.log(`  log      ${config.storage.logFile || 'off'}`);
+    console.log(`  api      ${config.security?.token ? 'token required' : 'open on loopback'}`);
     console.log(`\n  Ctrl+C to stop.\n`);
     log.info('server started', {
       host,
@@ -219,7 +276,22 @@ if (isMain) {
       adapter: config.runtime.adapter,
       node: process.versions.node,
       pid: process.pid,
+      // The fact of a token, never the token. This line goes to a file.
+      encrypted,
+      tokenRequired: Boolean(config.security?.token),
     });
+
+    // Plain chats in a folder now being read encrypted are invisible, not lost,
+    // and an empty sidebar is the worst possible way to find that out.
+    if (encrypted) {
+      const left = await countPlaintextChats(config.storage.chatsDir);
+      if (left > 0) {
+        console.warn(
+          `  [warn] ${left} un-encrypted chat file(s) in that folder are not shown.\n` +
+            `         Move them across with:  npm run encrypt-chats\n`,
+        );
+      }
+    }
   });
 
   for (const sig of ['SIGINT', 'SIGTERM']) {
