@@ -8,22 +8,17 @@
     "ollamaUrl": "http://127.0.0.1:11434",
     "llamaCppUrl": "http://127.0.0.1:8080",
     "ollamaBin": "",
-    "ollamaEnv": {
-      "OLLAMA_MODELS": "N:\\ollama-models",
-      "OLLAMA_FLASH_ATTENTION": "1",
-      "OLLAMA_KV_CACHE_TYPE": "q8_0",
-      "OLLAMA_CONTEXT_LENGTH": "16384"
-    }
+    "ollamaEnv": {}
   },
   "storage": {
-    "chatsDir": "N:/landslide-local/chats",
-    "modelsDir": "N:/models",
+    "chatsDir": "./chats",
+    "modelsDir": "./models",
     "logFile": "./logs/app.log"
   },
   "hardware": {
     "vramTotalGb": 8,
     "vramUsableGb": 6.65,
-    "label": "RTX 5060 8GB"
+    "label": "local GPU"
   },
   "security": {
     "token": "",

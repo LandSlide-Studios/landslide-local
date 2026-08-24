@@ -46,7 +46,22 @@ function deepMerge(base, extra) {
   return out;
 }
 
-export function loadConfig({ file = path.join(ROOT, 'config.json'), env = process.env } = {}) {
+/**
+ * Three layers, lowest first: DEFAULTS, the tracked `config.json`, then an
+ * optional `config.local.json` that git ignores.
+ *
+ * The tracked file has to work on a machine that is not this one, so it holds
+ * relative paths and nothing about anybody's drive letters. Anything specific to
+ * an install - where the GGUFs live, which GPU, a bearer token - belongs in the
+ * local file, which never leaves the machine. Without this split the repo either
+ * ships someone's `N:` paths or the owner re-edits a tracked file after every
+ * pull.
+ */
+export function loadConfig({
+  file = path.join(ROOT, 'config.json'),
+  localFile = path.join(ROOT, 'config.local.json'),
+  env = process.env,
+} = {}) {
   let onDisk = {};
   try {
     onDisk = JSON.parse(readFileSync(file, 'utf8'));
@@ -56,7 +71,16 @@ export function loadConfig({ file = path.join(ROOT, 'config.json'), env = proces
     }
   }
 
-  const cfg = deepMerge(DEFAULTS, onDisk);
+  let local = {};
+  try {
+    local = JSON.parse(readFileSync(localFile, 'utf8'));
+  } catch (err) {
+    if (err.code !== 'ENOENT') {
+      throw new Error(`config.local.json is not valid JSON: ${err.message}`);
+    }
+  }
+
+  const cfg = deepMerge(deepMerge(DEFAULTS, onDisk), local);
 
   if (env.LANDSLIDE_PORT) cfg.server.port = Number(env.LANDSLIDE_PORT);
   if (env.LANDSLIDE_ADAPTER) cfg.runtime.adapter = env.LANDSLIDE_ADAPTER;

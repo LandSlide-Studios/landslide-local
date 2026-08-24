@@ -7,3 +7,4 @@ logs/
 .download.log
 backups/
 .check-chats/
+config.local.json
