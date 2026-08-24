@@ -9,7 +9,7 @@
   },
   "scripts": {
     "start": "node src/server.js",
-    "test": "node --test --test-force-exit",
+    "test": "node --test --test-force-exit --test-concurrency=1",
     "test:core": "node --test --test-force-exit test/chat-store.test.js test/think-stream.test.js test/runtime.test.js test/api.test.js test/regression.test.js",
     "preflight": "node scripts/preflight.mjs",
     "fetch-models": "node scripts/fetch-models.mjs",
@@ -17,7 +17,7 @@
     "encrypt-chats": "node scripts/encrypt-chats.mjs",
     "restore": "node scripts/restore.mjs",
     "autostart": "node scripts/autostart.mjs",
-    "test:acceptance": "node --test --test-force-exit \"test/acceptance/*.test.js\"",
+    "test:acceptance": "node --test --test-force-exit --test-concurrency=1 \"test/acceptance/*.test.js\"",
     "test:ui": "node --test --test-force-exit test/ui.test.js",
     "verify-live": "node scripts/verify-live.mjs",
     "lock": "node scripts/acceptance-lock.mjs --verify",

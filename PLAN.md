@@ -109,10 +109,16 @@ and move on rather than grinding.
 
 ```
 node scripts/acceptance-lock.mjs --verify   # checksums intact
-node --test --test-force-exit               # whole suite incl. acceptance
+node --test --test-force-exit --test-concurrency=1   # whole suite incl. acceptance
 node scripts/preflight.mjs                  # 0 FAIL
 node scripts/verify-live.mjs                # reaches a real model
 ```
+
+`--test-concurrency=1` is required, not cosmetic either. I2-A3 adds a model to
+the live `models.json` to prove the loader reads it fresh, and the runner
+executes files in parallel by default - so `api.test.js` saw six models instead
+of five in roughly one full run in three. A gate that fails one time in three is
+a gate people learn to re-run rather than read. Serial costs 13 seconds.
 
 `--test-force-exit` is required, not cosmetic. An acceptance test that fails
 skips its own trailing `close()`, leaking a listening server that holds the
