@@ -111,3 +111,29 @@ answers 409. Before F9-C those buttons were live in the demo and loaded models
 into a real Ollama. Flagged only because the README's demo paragraph does not
 mention preload either way — nothing to correct, but the demo does look sparser
 than it did.
+
+## E11. `I3-A10` does not test what its name and comment say (locked file)
+
+`test/acceptance/i3-mcp.test.js:277-286` is named "malformed JSON on stdin does
+not kill the server" and carries the comment `// Deliberately not valid JSON-RPC.`
+— but the harness exposes only `call()` and `notify()`, both of which write valid
+JSON, and the test's only write between initialize and the final `tools/list` is a
+well-formed `notifications/initialized`. So the test proves the server survives a
+*notification*, not junk. The parse-error path it means to cover is never entered.
+
+Not fixable from here: acceptance files are locked and are not the builder's to
+edit. The behaviour it intended to pin does work — verified by hand instead, by
+piping a literal `not json at all {{{` line into a live server between two real
+calls. The server answered
+`{"jsonrpc":"2.0","id":null,"error":{"code":-32700,...}}`, kept the session up and
+completed the calls on either side of it. Someone with the planner's authority
+should give the harness a `raw(text)` method and have A10 use it.
+
+## E12. `ChatStore.search()` re-reads and re-parses every chat file per query
+
+`readAll()` in `src/core/chat-store.js` reads and `JSON.parse`s the whole store on
+every `search()`. At 9 chats that is nothing. It is worth knowing that
+`search_chats` is now reachable from an MCP client, where an agent may call it in
+a loop, so the cost is no longer bounded by how fast a human can type into the
+Ctrl+K box. Not a problem yet, and not worth a cache until the store is large;
+recorded so the next person does not discover it as a surprise.

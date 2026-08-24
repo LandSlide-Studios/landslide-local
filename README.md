@@ -133,6 +133,73 @@ gone. Nothing is written anywhere else.
 
 ---
 
+## Calling these models from Claude (MCP)
+
+`src/mcp/server.js` is an MCP server, so Claude — or any other MCP client — can hand
+work to the models on this machine. That is the point of it: a prompt you would rather
+not send to a hosted model, or one you want answered without a filter, gets delegated
+here instead, and the whole exchange stays on the N: drive.
+
+It speaks MCP's stdio transport directly (JSON-RPC 2.0, one message per line). There is
+no SDK and nothing to install — same zero-dependency rule as the rest of the app.
+
+**Register it.** In Claude Code:
+
+```
+claude mcp add landslide-local -- node N:\landslide-local\src\mcp\server.js
+```
+
+Or paste this into the client's MCP config file (Claude Desktop:
+`%APPDATA%\Claude\claude_desktop_config.json`) and restart the client:
+
+```json
+{
+  "mcpServers": {
+    "landslide-local": {
+      "command": "node",
+      "args": ["N:\\landslide-local\\src\\mcp\\server.js"]
+    }
+  }
+}
+```
+
+The doubled backslashes are JSON escaping, not a typo — `N:/landslide-local/src/mcp/server.js`
+works just as well and is easier to read. Ollama has to be running for
+`ask_local_model` to answer; the other two tools work regardless.
+
+**The three tools**, which are the entire surface:
+
+| Tool | Does |
+|---|---|
+| `ask_local_model` | Sends one prompt to one catalogued model and returns the answer. Optional `model` (defaults to `heretic-instruct-9b`) and `system`. Reasoning is stripped; you get the answer |
+| `list_local_models` | The five ids, their size, whether Ollama has them installed, and whether each fits in 8 GB |
+| `search_chats` | Searches the chats in `N:\landslide-local\chats` by title and message text |
+
+There is no filesystem tool, no shell tool, and no way to pass a raw model tag. A model
+with its refusal behaviour removed, reachable as a tool, should be able to write text
+and nothing else. `ask_local_model` looks its `model` argument up in the catalog rather
+than forwarding it, so a request naming anything else in the local registry — this
+machine also has `dolphin-llama3:70b` registered, 37.22 GiB against 8 GB of VRAM — is
+refused rather than loaded.
+
+**If you are editing it:** stdout is the transport. A single line of ordinary output
+written there corrupts the stream for the rest of the session, which is why every
+diagnostic in that file goes to stderr, and why the acceptance suite greps the source
+for the function that writes to stdout.
+
+To check it by hand without a client at all, pipe three messages into it:
+
+```
+(echo {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{}}} ^
+ & echo {"jsonrpc":"2.0","id":2,"method":"tools/list"} ^
+ & echo {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_local_models","arguments":{}}}) ^
+ | node src\mcp\server.js
+```
+
+Three JSON lines come back on stdout, the startup line and per-call timings on stderr.
+
+---
+
 ## Checking it still works
 
 ```
