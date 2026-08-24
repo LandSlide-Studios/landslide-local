@@ -89,16 +89,44 @@ That is what guarantees the model store on N: is found. A Start Menu launch inhe
 whatever environment Explorer happens to be holding, which is how `ollama list` came
 back empty after the store moved.
 
-**Preload** on each model card loads it into VRAM ahead of time. Loading a 9B off the
-SSD costs about 20 seconds, and without preloading you pay that on your first message.
-A model already resident shows **in VRAM** instead.
+Loading a 9B off the SSD costs about 20 seconds, and without preloading you pay that
+on your first message. Two things stop you paying it:
+
+- **Picking a model in the sidebar starts loading it.** The click is the moment you are
+  least busy — you are about to type — so that is when the load happens. It is silent:
+  one load at a time, nothing at all for a model already resident, and no error if the
+  runtime refuses, because you did not ask for it. Click through several cards quickly
+  and it loads the one you settle on, not the ones you passed.
+- **Preload** on a card does the same thing on demand, with a button that reports what
+  happened. A model already resident shows **in VRAM** instead.
 
 Once loaded, a model stays resident for 30 minutes after the last request that touched
-it. Both the preload and every chat message ask for the same 30 minutes, and both ask
-for the same context size — otherwise Ollama resets the timer to its own 5-minute
-default and reloads the model at a different context on the first message, which is
-exactly the reload the preload was meant to avoid. This applies to Ollama; llama-server
-has no equivalent and keeps its model loaded for as long as it runs.
+it. Both the preload and every chat message ask for the same 30 minutes, and both send
+the same `num_ctx` and `num_batch` — otherwise Ollama resets the timer to its own
+5-minute default and reloads the model at a different context or batch size on the first
+message, which is exactly the reload the preload was meant to avoid. Both values come
+from one place, `catalog.optionsFor()`, so they cannot drift apart. This applies to
+Ollama; llama-server has no equivalent and keeps its model loaded for as long as it runs.
+
+`num_batch` is how many prompt tokens are evaluated per pass — a prompt-processing
+knob, not a generation one. It is set per model, and the values are **measured on this
+machine**, prompt-eval throughput on a 2,781-token prompt against a warm model:
+
+| num_batch | 2B | 4B | 9B Instruct | 9B GAIN | 21B |
+|---|---|---|---|---|---|
+| 256 | 5,661 | 3,222 | 2,264 | 2,065 | 434 |
+| **512** | 6,006 | **3,425** | **2,423** | **2,428** | 536 |
+| **1024** | **6,382** | 3,391 | 2,418 | 2,311 | **630** |
+| 2048 | 6,108 | 3,375 | 2,400 | 2,273 | 632 |
+
+Prompt-eval tok/s. Bold is the value each model ships with.
+
+The three models that fit on the card peak at 512 and get *slower* above it: the compute
+buffer a bigger batch needs competes with the weights and the KV cache for the same
+6.65 GB. The 21B goes the other way and wants 1024 — it runs layers on system RAM
+whatever you do, so a bigger batch amortises that pass instead of aggravating it, and
+256 (the value that looks obvious for a model 1.5 GB over the card) is 31% slower than
+512 and 45% slower than 1024. Generation speed is unaffected by any of this.
 
 ---
 
@@ -425,15 +453,48 @@ GGUF. Start `llama-server` on port 8080, then change one line in `config.json`:
 Chatting works immediately: both runtimes sit behind the same interface, and the
 sidebar names whichever one is configured and reports its real health.
 
-What does **not** carry over, because it is Ollama-specific:
+### What you gain
+
+- **Speed on the same file.** Same GGUF, same quant, more tokens per second. llama.cpp
+  is where the kernels land first; Ollama ships behind it.
+- **Multi-token prediction.** llama.cpp can produce more than one token per forward
+  pass — natively for a GGUF that carries an MTP head, and otherwise through
+  `--model-draft`, which speculates with a small draft model and has the large model
+  verify a run of tokens at once. Ollama's HTTP API exposes neither, so this is only
+  reachable from here.
+
+  Read that as a door the switch opens rather than a speed-up it hands you. It needs
+  either a build that actually ships the MTP head or a draft model small enough to be
+  worth the VRAM beside a 9B, and **which of the five bundled quants qualify has not
+  been checked** — `llama-server` says so at load, so look before planning around it.
+- **Everything llama.cpp takes on the command line.** Sampler and runtime flags Ollama
+  does not surface are just arguments to `llama-server`.
+
+### What you lose
+
+All of it is Ollama-specific, and the app no longer pretends otherwise. `/api/runtime`
+reports `canWarm: false` and `canStart: false` under llamacpp, so the affordances do not
+render; and if something calls them anyway, `POST /api/runtime/start` and
+`POST /api/runtime/warm` both answer **409** naming the configured adapter instead of
+quietly acting on Ollama. That refusal is the guarantee — a hidden button is only a
+courtesy.
 
 - **Start Ollama** — the app can only launch Ollama. Start `llama-server` yourself.
-- **Preload / in VRAM** — llama-server holds one model for its whole lifetime;
-  there is nothing to preload and no residency list to show.
+- **Preload, including the automatic one when you pick a model** — llama-server holds
+  one model for its whole lifetime, so there is nothing to preload. The automatic
+  preload checks `canWarm` first and simply does nothing here.
+- **in VRAM** — the residency list is read from Ollama's `/api/ps`. There is no
+  equivalent, so the list is empty and no card claims residency.
 - **Model choice** — llama-server serves the single GGUF it was started with, so
   picking another card in the sidebar does not switch models. Restart it with a
   different `-m` instead.
+- **Per-model `num_ctx` and `num_batch`** — on llama-server these are startup flags
+  (`-c`, and `-b` / `-ub`), not request fields, so the catalog's per-model values do not
+  reach it. Set them on the command line to match the model you started it with.
+  `temperature`, `top_p`, `top_k`, `repeat_penalty` and `max_tokens` do carry over.
 - `fetch-models.mjs --cleanup-raw` — it deletes a raw GGUF only once Ollama's registry
   holds a copy. With llama.cpp the raw file *is* the model. Never run it.
 
-So: one line to switch what answers, and four Ollama-only conveniences you lose.
+So: one line to switch what answers, real speed and a decoding path Ollama cannot give
+you — against six Ollama-only conveniences, each of which now refuses honestly rather
+than lying.

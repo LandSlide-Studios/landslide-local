@@ -43,6 +43,11 @@ export function ollamaAdapter(config = {}) {
             repeat_penalty: options.repeat_penalty,
             num_ctx: options.num_ctx,
             num_predict: options.num_predict,
+            // Same rule as num_ctx: a model is LOADED at a batch size, so the
+            // preload and this call have to name the same one or Ollama loads
+            // it a second time and the preload bought nothing. Both sides get
+            // it from catalog.optionsFor(), so they cannot drift.
+            num_batch: options.num_batch,
           },
         }),
       });
