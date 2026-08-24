@@ -15,8 +15,10 @@
  *   node scripts/fetch-models.mjs --cleanup-raw   delete raw .gguf already registered
  *
  * `ollama create` copies the GGUF into Ollama's own blob store, so keeping the
- * raw file doubles the disk cost. The raw file is deleted once registration is
- * confirmed against the live registry - never before, and never if it failed.
+ * raw file doubles the disk cost. The raw file is deleted only when the live
+ * registry holds an entry built from THAT FILE - name and size both - never on
+ * a name match alone, and never if registration failed. See
+ * src/core/raw-cleanup.js for the rule and why it is that strict.
  */
 
 import { promises as fs, createWriteStream } from 'node:fs';
@@ -25,6 +27,7 @@ import { spawn } from 'node:child_process';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import * as catalog from '../src/core/model-catalog.js';
+import { canDeleteRaw, findRegistryEntry } from '../src/core/raw-cleanup.js';
 import { loadConfig } from '../src/util/config.js';
 
 const args = process.argv.slice(2);
@@ -179,29 +182,41 @@ async function register(model, file) {
 }
 
 /**
- * Remove the raw GGUF once Ollama holds its own copy. Confirms registration
- * against the live registry first: deleting the only copy of a 7GB file on the
- * strength of an exit code alone is not a trade worth making.
+ * Remove the raw GGUF once Ollama holds its own copy of THAT FILE.
+ *
+ * A name match is not enough and never was: correct a filename in the catalog,
+ * re-download, and the old registration still answers to the same name while
+ * the file on disk is a different one. The decision lives in
+ * src/core/raw-cleanup.js so it can be tested without a 7 GiB file; this
+ * function only supplies the two facts and does what it is told.
  */
 async function dropRaw(model, file) {
   const size = await sizeOf(file);
   if (size === 0) return;
-  if (!(await isRegistered(model.id))) {
-    console.log(`  ~ ${model.id}: not in the Ollama registry, keeping the raw file`);
+
+  const verdict = canDeleteRaw({
+    modelId: model.id,
+    fileBytes: size,
+    registryEntry: await registryEntry(model.id),
+  });
+  if (!verdict.ok) {
+    console.log(`  ~ ${verdict.reason}`);
     return;
   }
+
   await fs.rm(file, { force: true });
   console.log(`  - ${model.id}: raw GGUF removed, reclaimed ${gb(size)} GiB`);
 }
 
-async function isRegistered(id) {
+/** The live registry entry for an id, carrying the size Ollama built it from. */
+async function registryEntry(id) {
   try {
     const res = await fetch(`${OLLAMA_URL}/api/tags`, { signal: AbortSignal.timeout(5000) });
-    if (!res.ok) return false;
+    if (!res.ok) return null;
     const body = await res.json();
-    return (body.models ?? []).some((m) => m.name === id || m.name === `${id}:latest`);
+    return findRegistryEntry(id, body.models ?? []);
   } catch {
-    return false;
+    return null;
   }
 }
 

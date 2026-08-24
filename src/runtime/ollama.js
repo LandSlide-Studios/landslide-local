@@ -32,6 +32,10 @@ export function ollamaAdapter(config = {}) {
           model,
           messages: messages.map(({ role, content }) => ({ role, content })),
           stream: true,
+          // Ollama resets the eviction timer from whatever each request says.
+          // Omitting it dropped a model preloaded for 30 minutes back to the
+          // 5-minute default on the very first message.
+          keep_alive: options.keepAlive,
           options: {
             temperature: options.temperature,
             top_p: options.top_p,
@@ -39,6 +43,11 @@ export function ollamaAdapter(config = {}) {
             repeat_penalty: options.repeat_penalty,
             num_ctx: options.num_ctx,
             num_predict: options.num_predict,
+            // Same rule as num_ctx: a model is LOADED at a batch size, so the
+            // preload and this call have to name the same one or Ollama loads
+            // it a second time and the preload bought nothing. Both sides get
+            // it from catalog.optionsFor(), so they cannot drift.
+            num_batch: options.num_batch,
           },
         }),
       });
@@ -59,8 +68,10 @@ export function ollamaAdapter(config = {}) {
 
         const out = {};
         // Ollama 0.32+ streams reasoning out of band in message.thinking rather
-        // than as <think> tags inside content. Reading only content silently
-        // discarded every reasoning token.
+        // than as inline reasoning tags inside content. Reading only content
+        // silently discarded every reasoning token. Which delimiters, if any,
+        // mark reasoning is the facade's business — this adapter only says
+        // WHICH FIELD a delta arrived in and lets the facade decide.
         const thinking = frame.message?.thinking ?? '';
         const text = frame.message?.content ?? '';
         if (thinking) out.thinking = thinking;

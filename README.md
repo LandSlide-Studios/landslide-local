@@ -9,11 +9,15 @@ history — sits on your N: drive.
 
 ## First run
 
-**1. Update Ollama.** Your installed 0.7.0 predates Qwen 3.5 and cannot load these models.
+**1. Ollama must be 0.32 or newer.** Anything from the 0.x series before that predates
+Qwen 3.5 and cannot load these models. This machine is on **0.32.15**, so there is
+nothing to do here; on a fresh machine:
 
 ```
 winget upgrade --id Ollama.Ollama
 ```
+
+`npm run preflight` prints the version it actually found and warns if it is too old.
 
 **2. Set the Ollama environment once.** These matter a great deal on 8 GB of VRAM —
 flash attention plus an 8-bit KV cache roughly halves context memory, which is what
@@ -85,9 +89,44 @@ That is what guarantees the model store on N: is found. A Start Menu launch inhe
 whatever environment Explorer happens to be holding, which is how `ollama list` came
 back empty after the store moved.
 
-**Preload** on each model card loads it into VRAM ahead of time. Loading a 9B off the
-SSD costs about 20 seconds, and without preloading you pay that on your first message.
-A model already resident shows **in VRAM** instead. Models stay loaded for 30 minutes.
+Loading a 9B off the SSD costs about 20 seconds, and without preloading you pay that
+on your first message. Two things stop you paying it:
+
+- **Picking a model in the sidebar starts loading it.** The click is the moment you are
+  least busy — you are about to type — so that is when the load happens. It is silent:
+  one load at a time, nothing at all for a model already resident, and no error if the
+  runtime refuses, because you did not ask for it. Click through several cards quickly
+  and it loads the one you settle on, not the ones you passed.
+- **Preload** on a card does the same thing on demand, with a button that reports what
+  happened. A model already resident shows **in VRAM** instead.
+
+Once loaded, a model stays resident for 30 minutes after the last request that touched
+it. Both the preload and every chat message ask for the same 30 minutes, and both send
+the same `num_ctx` and `num_batch` — otherwise Ollama resets the timer to its own
+5-minute default and reloads the model at a different context or batch size on the first
+message, which is exactly the reload the preload was meant to avoid. Both values come
+from one place, `catalog.optionsFor()`, so they cannot drift apart. This applies to
+Ollama; llama-server has no equivalent and keeps its model loaded for as long as it runs.
+
+`num_batch` is how many prompt tokens are evaluated per pass — a prompt-processing
+knob, not a generation one. It is set per model, and the values are **measured on this
+machine**, prompt-eval throughput on a 2,781-token prompt against a warm model:
+
+| num_batch | 2B | 4B | 9B Instruct | 9B GAIN | 21B |
+|---|---|---|---|---|---|
+| 256 | 5,661 | 3,222 | 2,264 | 2,065 | 434 |
+| **512** | 6,006 | **3,425** | **2,423** | **2,428** | 536 |
+| **1024** | **6,382** | 3,391 | 2,418 | 2,311 | **630** |
+| 2048 | 6,108 | 3,375 | 2,400 | 2,273 | 632 |
+
+Prompt-eval tok/s. Bold is the value each model ships with.
+
+The three models that fit on the card peak at 512 and get *slower* above it: the compute
+buffer a bigger batch needs competes with the weights and the KV cache for the same
+6.65 GB. The 21B goes the other way and wants 1024 — it runs layers on system RAM
+whatever you do, so a bigger batch amortises that pass instead of aggravating it, and
+256 (the value that looks obvious for a model 1.5 GB over the card) is 31% slower than
+512 and 45% slower than 1024. Generation speed is unaffected by any of this.
 
 ---
 
@@ -116,20 +155,278 @@ it took, time to first token, token count and tokens per second.
 |---|---|
 | Chats | `N:\landslide-local\chats` — one JSON file per conversation |
 | Models | `N:\models` |
+| Log | `logs\app.log` inside this folder |
+| Backups | `backups\` inside this folder, when you make one |
 
-Chat files are plain JSON. Back them up by copying the folder; delete one and it is
-gone. Nothing is written anywhere else.
+Chat files are plain JSON. Delete one and it is gone. Nothing is written anywhere else,
+and nothing leaves the machine.
+
+Two options exist for when plain JSON on a loopback port is not private enough for what
+you use this for. Both are off until you turn them on, and neither changes anything
+about the app while they are off.
+
+---
+
+## Encrypting the chats
+
+With this on, every chat file is AES-256-GCM ciphertext under a key derived from your
+passphrase with scrypt. The title, the message bodies and the model's reasoning are all
+inside it. The only thing legible from outside is the file name, which is a random id.
+
+**If you forget the passphrase, every chat is gone.** Not "gone until it is reset" —
+gone. This app never writes the passphrase down, deliberately: a key kept beside the
+data it protects is not protecting anything. There is no recovery mode, no hint, no
+second copy and nobody to ask. Write it down somewhere real before you turn this on.
+
+### Turning it on
+
+**1. Back up first.** `npm run backup`, and put the archive somewhere else.
+
+**2. Set the passphrase.**
+
+```
+setx LANDSLIDE_PASSPHRASE "the passphrase you just wrote down"
+```
+
+It comes from the environment and never from `config.json`. Config gets printed, logged
+and pasted into bug reports; a passphrase that lives in it will eventually end up
+somewhere you did not intend.
+
+**3. Move the chats you already have.**
+
+```
+npm run encrypt-chats            says what it would do, changes nothing
+npm run encrypt-chats -- --yes   does it
+```
+
+Each chat is encrypted, written, read back off the disk and compared against the
+original — and only then is the plain file removed. Nothing is deleted that has not
+been verified first. If it is interrupted half way through, run it again and it picks
+up where it stopped; a file it cannot parse, or one whose encrypted copy already exists
+with different content, is left exactly where it is and reported rather than guessed at.
+
+**4. Make a missing passphrase an error rather than a downgrade.**
+
+```json
+{ "security": { "encryptChats": true } }
+```
+
+That flag does not switch encryption on — the passphrase does. What it does is make the
+app refuse to start when the passphrase is missing, instead of opening the folder as
+plain files and quietly writing your next conversation into it in the clear.
+
+If you use the MCP server as well, it reads the same folder and needs
+`LANDSLIDE_PASSPHRASE` in its environment too. Without it, it reports an empty history
+rather than an error.
+
+### What it does not cover
+
+- **`logs\app.log`.** It records requests, timings and errors — not chat content — and
+  it stays plain text.
+- **Backups made before you switched.** Those archives are still plaintext.
+- **Plaintext that was already deleted.** `encrypt-chats` overwrites each old file
+  before unlinking it, which is worth doing and not worth believing in: an SSD may well
+  have written the new bytes to a different block and left the originals sitting in
+  flash, readable by anything that can address it directly.
+- **The running app.** While it is open, the passphrase and the decrypted chats are in
+  memory, and the browser has the decrypted text on screen.
+- **Going back.** There is no built-in migration from encrypted to plain. Copy anything
+  you want out of the app before you decide you are done with it.
+
+---
+
+## Locking the API to a token
+
+The server only ever answers on `127.0.0.1`, so anything reaching it is already running
+on this machine. A token draws a line inside that: the browser tab you opened gets in,
+and other software under your account does not — a script, an extension's helper,
+something scanning local ports for an open API.
+
+```json
+{ "security": { "token": "paste-a-long-random-string-here" } }
+```
+
+Or keep it out of the file entirely:
+
+```
+setx LANDSLIDE_TOKEN "paste-a-long-random-string-here"
+```
+
+Generate one with:
+
+```
+node -e "console.log(require('node:crypto').randomBytes(24).toString('base64url'))"
+```
+
+The `config.json` in this folder ships with `"token": ""`, which means off. It should
+never be committed with a real one in it.
+
+With a token set, every `/api/` request needs an `Authorization: Bearer <token>` header.
+The page itself still loads without one — it has to, or there would be nowhere to type
+the token — so the first API call comes back 401, the app asks you for the token, and
+remembers it in that browser from then on. If the answer is wrong it is discarded rather
+than left to fail every request afterwards. Comparison is constant-time, over digests,
+so a wrong token gives nothing away about the right one.
+
+**What it is not.** It is not a login, and it is not protection from somebody sitting at
+this keyboard — they can read `config.json`, or the browser's storage, in about ten
+seconds. It raises the bar for other software on the machine, and that is the entire
+claim being made for it. Against a person with physical access, the encryption above is
+what helps, and only while the app is shut.
+
+---
+
+## Reliability
+
+Three things that matter once you actually live in this app: it keeps a log, it can
+hand you your chats back, and it can start itself at login.
+
+### The log
+
+Every run appends to `logs\app.log` — startup, shutdown, failed requests, and anything
+that would otherwise have vanished with the console window. The path comes from
+`config.json`:
+
+```json
+{ "storage": { "logFile": "./logs/app.log" } }
+```
+
+It is relative on purpose, so it follows the folder if you move it to another drive.
+Set it to `""` to turn logging off entirely.
+
+The file cannot grow without bound. At 2 MB it rotates: `app.log` becomes `app.log.1`,
+`.1` becomes `.2`, and the fourth one is dropped. Three archives plus the active file
+is the whole footprint.
+
+Logging never takes the app down with it. If the path is unwritable — the drive filled
+up, or something is sitting where the file should be — the logger switches itself off
+and the app carries on. A log line is not worth losing a conversation over.
+
+The same reasoning is why the server installs `unhandledRejection` and
+`uncaughtException` handlers. Node's default is to exit on a stray rejection; here it
+gets written to the log and the session keeps going.
+
+### Backing up your chats
+
+```
+npm run backup                       creates backups\chats-<timestamp>.lsb
+npm run backup -- D:/keep/chats.lsb  writes exactly there
+```
+
+One file holds the whole chats folder, gzipped, with a SHA-256 of every file inside it.
+Copy it to a second drive and that is a real backup.
+
+```
+npm run restore -- backups\chats-2026-08-24T10-31-02.lsb
+npm run restore -- <archive> --into D:/somewhere    restore beside the live folder first
+npm run restore -- <archive> --force                write over a folder that is not empty
+```
+
+Restore checks every checksum in the archive *before* it writes anything. A truncated
+or edited archive is refused with the destination still empty — a half-restored chat
+folder is worse than no restore, because it looks like it worked. It also refuses a
+destination that already holds files unless you pass `--force`, so an old backup cannot
+land on top of a live folder by accident. Restoring into an empty folder to look first
+costs nothing.
+
+The archive format is a header plus the file bytes; there is no dependency involved and
+nothing to install to read it back.
+
+### Starting at login
+
+```
+npm run autostart              is it on?
+npm run autostart install
+npm run autostart uninstall
+```
+
+Install writes one file — `landslide-local.cmd` — into your own Startup folder
+(`%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup`). No registry key, no
+scheduled task, no administrator prompt. Deleting that file by hand is a complete
+uninstall, and `uninstall` removes it only if it is the file this app wrote, so a
+shortcut you put there yourself is never touched.
+
+---
+
+## Calling these models from Claude (MCP)
+
+`src/mcp/server.js` is an MCP server, so Claude — or any other MCP client — can hand
+work to the models on this machine. That is the point of it: a prompt you would rather
+not send to a hosted model, or one you want answered without a filter, gets delegated
+here instead, and the whole exchange stays on the N: drive.
+
+It speaks MCP's stdio transport directly (JSON-RPC 2.0, one message per line). There is
+no SDK and nothing to install — same zero-dependency rule as the rest of the app.
+
+**Register it.** In Claude Code:
+
+```
+claude mcp add landslide-local -- node N:\landslide-local\src\mcp\server.js
+```
+
+Or paste this into the client's MCP config file (Claude Desktop:
+`%APPDATA%\Claude\claude_desktop_config.json`) and restart the client:
+
+```json
+{
+  "mcpServers": {
+    "landslide-local": {
+      "command": "node",
+      "args": ["N:\\landslide-local\\src\\mcp\\server.js"]
+    }
+  }
+}
+```
+
+The doubled backslashes are JSON escaping, not a typo — `N:/landslide-local/src/mcp/server.js`
+works just as well and is easier to read. Ollama has to be running for
+`ask_local_model` to answer; the other two tools work regardless.
+
+**The three tools**, which are the entire surface:
+
+| Tool | Does |
+|---|---|
+| `ask_local_model` | Sends one prompt to one catalogued model and returns the answer. Optional `model` (defaults to `heretic-instruct-9b`) and `system`. Reasoning is stripped; you get the answer |
+| `list_local_models` | The five ids, their size, whether Ollama has them installed, and whether each fits in 8 GB |
+| `search_chats` | Searches the chats in `N:\landslide-local\chats` by title and message text |
+
+There is no filesystem tool, no shell tool, and no way to pass a raw model tag. A model
+with its refusal behaviour removed, reachable as a tool, should be able to write text
+and nothing else. `ask_local_model` looks its `model` argument up in the catalog rather
+than forwarding it, so a request naming anything else in the local registry — this
+machine also has `dolphin-llama3:70b` registered, 37.22 GiB against 8 GB of VRAM — is
+refused rather than loaded.
+
+**If you are editing it:** stdout is the transport. A single line of ordinary output
+written there corrupts the stream for the rest of the session, which is why every
+diagnostic in that file goes to stderr, and why the acceptance suite greps the source
+for the function that writes to stdout.
+
+To check it by hand without a client at all, pipe three messages into it:
+
+```
+(echo {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{}}} ^
+ & echo {"jsonrpc":"2.0","id":2,"method":"tools/list"} ^
+ & echo {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_local_models","arguments":{}}}) ^
+ | node src\mcp\server.js
+```
+
+Three JSON lines come back on stdout, the startup line and per-call timings on stderr.
 
 ---
 
 ## Checking it still works
 
 ```
-npm test          # 79 tests, no model needed
+npm run test:core # the five core suites: 79 tests, none of which touches a model
 npm run preflight # environment, fonts, models, and the offline check
 ```
 
-Neither of those touches a model. To prove the whole path really works - Ollama up,
+`npm test` runs everything in the folder instead, acceptance suites included — and
+those describe work that is still queued, so it reports failures on purpose. Use it
+to see what is left, not to decide whether the app is healthy.
+
+Neither of the two commands above touches a model. To prove the whole path really works - Ollama up,
 store readable, a real model generating, and the reply saved - double-click
 `verify.cmd` or run:
 
@@ -153,4 +450,51 @@ GGUF. Start `llama-server` on port 8080, then change one line in `config.json`:
 { "runtime": { "adapter": "llamacpp" } }
 ```
 
-That is the entire migration — the app talks to both through the same interface.
+Chatting works immediately: both runtimes sit behind the same interface, and the
+sidebar names whichever one is configured and reports its real health.
+
+### What you gain
+
+- **Speed on the same file.** Same GGUF, same quant, more tokens per second. llama.cpp
+  is where the kernels land first; Ollama ships behind it.
+- **Multi-token prediction.** llama.cpp can produce more than one token per forward
+  pass — natively for a GGUF that carries an MTP head, and otherwise through
+  `--model-draft`, which speculates with a small draft model and has the large model
+  verify a run of tokens at once. Ollama's HTTP API exposes neither, so this is only
+  reachable from here.
+
+  Read that as a door the switch opens rather than a speed-up it hands you. It needs
+  either a build that actually ships the MTP head or a draft model small enough to be
+  worth the VRAM beside a 9B, and **which of the five bundled quants qualify has not
+  been checked** — `llama-server` says so at load, so look before planning around it.
+- **Everything llama.cpp takes on the command line.** Sampler and runtime flags Ollama
+  does not surface are just arguments to `llama-server`.
+
+### What you lose
+
+All of it is Ollama-specific, and the app no longer pretends otherwise. `/api/runtime`
+reports `canWarm: false` and `canStart: false` under llamacpp, so the affordances do not
+render; and if something calls them anyway, `POST /api/runtime/start` and
+`POST /api/runtime/warm` both answer **409** naming the configured adapter instead of
+quietly acting on Ollama. That refusal is the guarantee — a hidden button is only a
+courtesy.
+
+- **Start Ollama** — the app can only launch Ollama. Start `llama-server` yourself.
+- **Preload, including the automatic one when you pick a model** — llama-server holds
+  one model for its whole lifetime, so there is nothing to preload. The automatic
+  preload checks `canWarm` first and simply does nothing here.
+- **in VRAM** — the residency list is read from Ollama's `/api/ps`. There is no
+  equivalent, so the list is empty and no card claims residency.
+- **Model choice** — llama-server serves the single GGUF it was started with, so
+  picking another card in the sidebar does not switch models. Restart it with a
+  different `-m` instead.
+- **Per-model `num_ctx` and `num_batch`** — on llama-server these are startup flags
+  (`-c`, and `-b` / `-ub`), not request fields, so the catalog's per-model values do not
+  reach it. Set them on the command line to match the model you started it with.
+  `temperature`, `top_p`, `top_k`, `repeat_penalty` and `max_tokens` do carry over.
+- `fetch-models.mjs --cleanup-raw` — it deletes a raw GGUF only once Ollama's registry
+  holds a copy. With llama.cpp the raw file *is* the model. Never run it.
+
+So: one line to switch what answers, real speed and a decoding path Ollama cannot give
+you — against six Ollama-only conveniences, each of which now refuses honestly rather
+than lying.

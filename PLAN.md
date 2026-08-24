@@ -109,10 +109,21 @@ and move on rather than grinding.
 
 ```
 node scripts/acceptance-lock.mjs --verify   # checksums intact
-node --test                                 # whole suite incl. acceptance
+node --test --test-force-exit --test-concurrency=1   # whole suite incl. acceptance
 node scripts/preflight.mjs                  # 0 FAIL
 node scripts/verify-live.mjs                # reaches a real model
 ```
+
+`--test-concurrency=1` is required, not cosmetic either. I2-A3 adds a model to
+the live `models.json` to prove the loader reads it fresh, and the runner
+executes files in parallel by default - so `api.test.js` saw six models instead
+of five in roughly one full run in three. A gate that fails one time in three is
+a gate people learn to re-run rather than read. Serial costs 13 seconds.
+
+`--test-force-exit` is required, not cosmetic. An acceptance test that fails
+skips its own trailing `close()`, leaking a listening server that holds the
+event loop open forever - the runner printed a correct summary and then hung.
+The flag is the fix; the leak itself is logged as a harness debt item.
 
 ## Branching
 
@@ -125,14 +136,14 @@ second approval the loop is designed to stop at.
 
 | # | Item | Status | Branch | Done when |
 |---|------|--------|--------|-----------|
-| I0 | Second-review findings: C1 raw-GGUF deleted by name not identity (data loss), I2 poll lies about which adapter is live, I3 preload keep_alive/num_ctx mismatch so it does not actually help, I4 streamed code blocks render outside the code box, I5 `runtimeModelTag`/`options` bypass the catalog, M6 failed newChat wedges the composer, M7 preload failure shows nothing, M8 switching chats mid-stream eats the reply, M9 spawn errors swallowed, L10-L14, plus the false README/CLAUDE claims | todo | - | acceptance/i0 green: cleanup cannot delete a file whose size disagrees with the registry entry; the adapter shown is the adapter configured; a warmed model serves the next message without reloading; a stream ending inside a fence renders identically to a reload; no request-supplied string reaches the runtime as a model id |
-| I8 | Per-model output formatting: render markdown (headings, lists, bold, tables, blockquotes) not just fenced code, with a per-model profile so a prose model and a table-heavy model each render the way they actually write | todo | - | acceptance/i8 green: markdown tables, lists, headings and emphasis render as elements not literal asterisks; each catalog model declares a format profile; model output is still never inserted as HTML |
-| I1 | Quality of life: context meter + auto-trim, system prompt panel, regenerate/edit/branch, parameter controls, rename in UI, markdown export, unload-model, prompt library, model-list keyboard nav, auto-preload on select | todo | - | acceptance/i1 green: a chat exceeding num_ctx never silently drops turns; a system prompt set in the UI reaches the model; regenerate replaces the last reply; every listed control is reachable by keyboard |
-| I2 | Architecture: catalog becomes data (`models.json`), split `api.js`, split `public/app.js` into ES modules, one shared event-schema module used by both sides, single explicit reasoning path | todo | - | acceptance/i2 green: adding a model requires no source edit; no file over 400 lines in `src/` or `public/`; front and back import the same event constants; `node --test` still green |
-| I3 | MCP: server exposing local models to Claude (`ask_local_model`, `list_local_models`, `search_chats`) over stdio, zero dependencies | todo | - | acceptance/i3 green: the server speaks MCP initialize/tools-list/tools-call over stdio and returns a real completion from a local model; refuses unknown model ids |
-| I4 | Security & privacy: at-rest encryption for chats (opt-in, node:crypto), loopback auth token, app lock | todo | - | acceptance/i4 green: with encryption on, no plaintext message body appears in any file on disk; a request without the token is refused; existing plaintext chats migrate without loss |
-| I5 | Performance: auto-preload selected model, `num_batch` tuning, search index, documented llama.cpp/MTP path | todo | - | acceptance/i5 green: search over 500 synthetic chats completes under 200ms; selecting a model preloads it; no regression in measured tok/s |
-| I6 | Reliability & ops: start-on-login, rotating log file, chat backup/restore, server auto-restart | todo | - | acceptance/i6 green: logs are written and rotate at a size cap; backup produces a restorable archive and restore round-trips byte-identical; install/uninstall of the login entry is reversible |
-| I7 | Testing gaps: headless browser-level UI test, long-stream soak test, verify-live exercises the thinking path on a slow model | todo | - | acceptance/i7 green: a UI test drives a real conversation and asserts DOM state without a human; a 20k-character reasoning stream renders without the main thread blocking over 100ms |
+| I0 | Second-review findings: C1 raw-GGUF deleted by name not identity (data loss), I2 poll lies about which adapter is live, I3 preload keep_alive/num_ctx mismatch so it does not actually help, I4 streamed code blocks render outside the code box, I5 `runtimeModelTag`/`options` bypass the catalog, M6 failed newChat wedges the composer, M7 preload failure shows nothing, M8 switching chats mid-stream eats the reply, M9 spawn errors swallowed, L10-L14, plus the false README/CLAUDE claims | done | loop/i0-review-findings | acceptance/i0 green: cleanup cannot delete a file whose size disagrees with the registry entry; the adapter shown is the adapter configured; a warmed model serves the next message without reloading; a stream ending inside a fence renders identically to a reload; no request-supplied string reaches the runtime as a model id |
+| I8 | Per-model output formatting: render markdown (headings, lists, bold, tables, blockquotes) not just fenced code, with a per-model profile so a prose model and a table-heavy model each render the way they actually write | done | loop/i8-formatting | acceptance/i8 green: markdown tables, lists, headings and emphasis render as elements not literal asterisks; each catalog model declares a format profile; model output is still never inserted as HTML |
+| I1 | Quality of life: context meter + auto-trim, system prompt panel, regenerate/edit/branch, parameter controls, rename in UI, markdown export, unload-model, prompt library, model-list keyboard nav, auto-preload on select | done | loop/i1-qol | acceptance/i1 green: a chat exceeding num_ctx never silently drops turns; a system prompt set in the UI reaches the model; regenerate replaces the last reply; every listed control is reachable by keyboard |
+| I2 | Architecture: catalog becomes data (`models.json`), split `api.js`, split `public/app.js` into ES modules, one shared event-schema module used by both sides, single explicit reasoning path | done | loop/i2-architecture | acceptance/i2 green: adding a model requires no source edit; no file over 400 lines in `src/` or `public/`; front and back import the same event constants; `node --test` still green |
+| I3 | MCP: server exposing local models to Claude (`ask_local_model`, `list_local_models`, `search_chats`) over stdio, zero dependencies | done | loop/i3-mcp | acceptance/i3 green: the server speaks MCP initialize/tools-list/tools-call over stdio and returns a real completion from a local model; refuses unknown model ids |
+| I4 | Security & privacy: at-rest encryption for chats (opt-in, node:crypto), loopback auth token, app lock | done | loop/i4-security | acceptance/i4 green: with encryption on, no plaintext message body appears in any file on disk; a request without the token is refused; existing plaintext chats migrate without loss |
+| I5 | Performance: auto-preload selected model, `num_batch` tuning, search index, documented llama.cpp/MTP path | done | loop/i5-performance | acceptance/i5 green: search over 500 synthetic chats completes under 200ms; selecting a model preloads it; no regression in measured tok/s |
+| I6 | Reliability & ops: start-on-login, rotating log file, chat backup/restore, server auto-restart | done | loop/i6-reliability | acceptance/i6 green: logs are written and rotate at a size cap; backup produces a restorable archive and restore round-trips byte-identical; install/uninstall of the login entry is reversible |
+| I7 | Testing gaps: headless browser-level UI test, long-stream soak test, verify-live exercises the thinking path on a slow model | done | loop/i7-testing | acceptance/i7 green: a UI test drives a real conversation and asserts DOM state without a human; a 20k-character reasoning stream renders without the main thread blocking over 100ms |
 
 Status: `todo` · `building` · `review` · `done` · `blocked`

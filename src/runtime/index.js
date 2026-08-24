@@ -17,7 +17,9 @@
  * separation, timing, token accounting, abort semantics — lives here once.
  */
 
+import { EVENT } from '../../public/shared/events.js';
 import { createThinkStream } from '../core/think-stream.js';
+import { KEEP_ALIVE } from '../core/model-catalog.js';
 import { ollamaAdapter } from './ollama.js';
 import { llamaCppAdapter } from './llamacpp.js';
 import { fakeAdapter } from './fake.js';
@@ -62,7 +64,12 @@ export function createRuntime(runtimeConfig = {}) {
         throw new Error('chat requires at least one message');
       }
 
-      const think = createThinkStream({ startInThink: options.startInThink === true });
+      // Residency is a facade concern, not a protocol one: every call that
+      // touches a model must ask for the same keep-alive, or the first message
+      // after a preload silently resets it to the server's 5-minute default.
+      const runOptions = { keepAlive: KEEP_ALIVE, ...options };
+
+      const think = createThinkStream({ startInThink: runOptions.startInThink === true });
       const started = Date.now();
       let firstTokenMs = null;
       let answer = '';
@@ -74,20 +81,20 @@ export function createRuntime(runtimeConfig = {}) {
 
       const push = (events) => {
         for (const e of events) {
-          if (e.type === 'think') thinking += e.text;
+          if (e.type === EVENT.think) thinking += e.text;
           else answer += e.text;
           onEvent(e);
         }
       };
 
       try {
-        for await (const delta of adapter.stream({ model, messages, options, signal })) {
+        for await (const delta of adapter.stream({ model, messages, options: runOptions, signal })) {
           // Out-of-band reasoning is already unambiguous; re-parsing it through
           // ThinkStream could only lose information, so it bypasses.
           if (delta.thinking) {
             if (firstTokenMs === null) firstTokenMs = Date.now() - started;
             tokens += 1;
-            push([{ type: 'think', text: delta.thinking }]);
+            push([{ type: EVENT.think, text: delta.thinking }]);
           }
           if (delta.text) {
             if (firstTokenMs === null) firstTokenMs = Date.now() - started;
@@ -117,7 +124,7 @@ export function createRuntime(runtimeConfig = {}) {
         promptTokens,
         tokensPerSecond: tokens > 0 && genMs > 0 ? Number(((tokens / genMs) * 1000).toFixed(1)) : 0,
       };
-      onEvent({ type: 'stats', stats });
+      onEvent({ type: EVENT.stats, stats });
 
       return { answer, thinking, stats, aborted };
     },

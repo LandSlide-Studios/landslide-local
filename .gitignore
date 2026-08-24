@@ -5,3 +5,5 @@ logs/
 .DS_Store
 .demo-chats/
 .download.log
+backups/
+.check-chats/

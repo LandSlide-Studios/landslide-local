@@ -25,14 +25,28 @@ const LOCK = path.join(ROOT, 'test', 'acceptance.lock.json');
 const mode = process.argv.find((a) => a.startsWith('--')) ?? '--verify';
 
 const files = await listAcceptance();
-const current = {};
-for (const f of files) {
-  current[f] = createHash('sha256')
-    .update(await fs.readFile(path.join(DIR, f)))
-    .digest('hex');
+/**
+ * Hash the NORMALISED text, not the raw bytes.
+ *
+ * git rewrites line endings on checkout, so a byte hash taken in one working
+ * tree reports every file as MODIFIED in a fresh worktree on the same commit.
+ * A tamper alarm that fires on a clean checkout is an alarm people learn to
+ * ignore, which costs more than the thing it was guarding. Line endings cannot
+ * change what a test asserts; the content can, and that is what is hashed.
+ */
+async function hashOf(file) {
+  const text = await fs.readFile(path.join(DIR, file), 'utf8');
+  return createHash('sha256').update(text.split(String.fromCharCode(13)).join('')).digest('hex');
 }
 
+const current = {};
+for (const f of files) current[f] = await hashOf(f);
+
 if (mode === '--write') {
+  if (files.length === 0) {
+    console.log('  nothing to lock — test/acceptance/ holds no .test.js file');
+    process.exit(1);
+  }
   await fs.writeFile(LOCK, JSON.stringify(current, null, 2) + '\n', 'utf8');
   console.log(`  locked ${files.length} acceptance file(s)`);
   for (const f of files) console.log(`    ${f}  ${current[f].slice(0, 12)}`);
@@ -53,6 +67,16 @@ if (mode === '--status') {
 }
 
 /* --verify */
+// Every comparison below is vacuously satisfied by an empty lock, so a lock that
+// was emptied — or written before any suite existed — printed "intact (0
+// file(s))" and exited 0. A gate that reports success having checked nothing is
+// worse than no gate: it is the one result nobody re-reads.
+if (Object.keys(locked).length === 0) {
+  console.log('\n  ACCEPTANCE LOCK EMPTY — nothing is locked, so nothing was verified\n');
+  console.log('    Run --write as planner once the acceptance suites exist.\n');
+  process.exit(1);
+}
+
 const problems = [];
 for (const [f, hash] of Object.entries(locked)) {
   if (!(f in current)) problems.push(`${f}: DELETED`);

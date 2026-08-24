@@ -15,6 +15,8 @@
  *     the input exactly.
  */
 
+import { EVENT } from '../../public/shared/events.js';
+
 const DEFAULT_OPEN = '<think>';
 const DEFAULT_CLOSE = '</think>';
 
@@ -30,18 +32,18 @@ function danglingPrefixLength(buf, tag) {
 export function createThinkStream(opts = {}) {
   const openTag = opts.openTag ?? DEFAULT_OPEN;
   const closeTag = opts.closeTag ?? DEFAULT_CLOSE;
-  let state = opts.startInThink ? 'think' : 'answer';
+  let state = opts.startInThink ? EVENT.think : EVENT.answer;
   let buf = '';
 
   function drain(flush) {
     const events = [];
     for (;;) {
-      const tag = state === 'think' ? closeTag : openTag;
+      const tag = state === EVENT.think ? closeTag : openTag;
       const idx = buf.indexOf(tag);
       if (idx !== -1) {
         if (idx > 0) events.push({ type: state, text: buf.slice(0, idx) });
         buf = buf.slice(idx + tag.length);
-        state = state === 'think' ? 'answer' : 'think';
+        state = state === EVENT.think ? EVENT.answer : EVENT.think;
         continue;
       }
       // No complete tag. Emit everything except a possible partial tag tail.
@@ -75,7 +77,7 @@ export function splitThinking(text, opts = {}) {
   let think = '';
   let answer = '';
   for (const e of events) {
-    if (e.type === 'think') think += e.text;
+    if (e.type === EVENT.think) think += e.text;
     else answer += e.text;
   }
   return { think, answer };

@@ -9,11 +9,19 @@ Offline chat client for uncensored Qwen 3.5 GGUF models. Runs on Tommy's machine
    one appears. The whole point is that this installs and runs with no network.
 2. **No external hosts anywhere in `src/` or `public/`.** No CDN scripts, no Google
    Fonts link, no remote images. Fonts are local `.woff2` files in `public/fonts`.
-   `scripts/fetch-models.mjs` is the single exempt file — it is the one-time downloader.
-   Preflight greps for this and FAILs on a violation.
-3. **Model output never reaches `innerHTML`.** `renderText` in `public/app.js` builds
-   text nodes and `<pre><code>` elements only. An uncensored local model is untrusted
-   input like any other.
+   Two files are exempt from that grep and no others: `scripts/fetch-models.mjs`, the
+   one-time downloader, and `scripts/verify-urls.mjs`, which HEADs the Hugging Face
+   URLs the catalog claims. Preflight holds that list and FAILs on any other file.
+   The check catches a scheme-less URL as well as an `https` one.
+3. **Model output never reaches `innerHTML`.** `public/render.js` — with its parser
+   internals under `public/render/`, which nothing else imports — parses the markdown
+   the models write and builds every element itself from text nodes; no string from a
+   model is ever handed to the DOM as markup, and it is the only module allowed to turn
+   model output into DOM. An uncensored local model is untrusted input like any other:
+   a tag the model writes is shown inert, with its attributes dropped, and a link whose
+   URL is not http, https or mailto loses the URL. Streamed output must render
+   identically to the same text re-rendered after a reload — that equivalence is what
+   `test/acceptance/i0-*.test.js` pins, and `i8-*` pins it again for markdown.
 4. **Loopback only.** The server binds `127.0.0.1` and rejects non-loopback `Origin`.
    Do not add a `0.0.0.0` bind or a CORS allowance.
 
@@ -40,13 +48,29 @@ them is hypothetical.
   contract suite in `test/chat-store.test.js`. Add a behaviour there, not to one adapter.
 - `ThinkStream` (`src/core/think-stream.js`) — pure. Holds back any suffix that could
   still become a tag, so tags split across chunks work. Do not "simplify" the holdback.
-- `src/api.js` is deliberately thin. Logic accumulating there is a smell; push it down.
+- `src/api.js` is deliberately thin: it builds the dependencies, concatenates the
+  route tables from `src/api/` and runs the match-parse-answer loop. Logic
+  accumulating in a route is a smell; push it down.
+- The models are DATA. `models.json` at the repo root holds all five;
+  `src/core/model-catalog.js` is the loader and holds no model id. Adding or
+  re-tuning a model is an edit to that file and nothing else.
+- The stream event names (`start`, `think`, `answer`, `stats`, `done`, `error`) are
+  defined once, in `public/shared/events.js`, and imported by both sides. It lives
+  under `public/` because that is the only folder the server serves, so it is the one
+  path a browser `<script type="module">` and a Node `import` can both reach.
 - `RuntimeSupervisor` (`src/core/runtime-supervisor.js`) starts Ollama with the env
   from `config.json` rather than an inherited one. That is deliberate and load-bearing:
   a stale environment block is why a model store on another drive goes unseen. The
-  executable path comes from config or a known install location, **never from a
-  request**, and the only value the HTTP layer forwards is a model id already in the
-  catalog.
+  executable path comes from config or a known absolute install location, **never from
+  a request**.
+- **Nothing a request says becomes a model id.** `src/api.js` sends `model.id` from the
+  catalog and nothing else; there is no field a caller can set to name a different one.
+  The only other value it forwards is generation options, and those go through
+  `catalog.optionsFor()`, which is a whitelist with a clamp — an unknown key is
+  dropped and `num_predict: -1` cannot be reached.
+- `src/core/raw-cleanup.js` owns the decision to delete a downloaded GGUF. Name plus
+  size, never name alone: the raw file is frequently the only copy, and there is no
+  offline path to fetch it again.
 
 ## Conventions
 
@@ -60,12 +84,17 @@ them is hypothetical.
 ## Before calling anything done
 
 ```
-node --test                  # must be all green
-node scripts/preflight.mjs   # must be 0 FAIL
-node scripts/verify-live.mjs # must reach a real model
+npm run test:core                          # the five core suites — must be 79/79
+node scripts/acceptance-lock.mjs --verify  # the target has not moved
+node scripts/preflight.mjs                 # must be 0 FAIL
+node scripts/verify-live.mjs               # must reach a real model
 ```
 
-The first two never touch a model. Three real bugs shipped past them because the
+`npm test` is bare auto-discovery: it also picks up the acceptance suites for queue
+items that have not been built yet, and those fail by design until they are. It is a
+progress reading, not a gate. The five core suites above are the gate.
+
+The first three never touch a model. Three real bugs shipped past them because the
 fake adapter emits 200-character scripts with inline `<think>` tags, and Ollama does
 neither. **A change to the runtime layer is not verified until `verify-live.mjs`
 passes.**

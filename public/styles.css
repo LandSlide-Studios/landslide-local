@@ -74,7 +74,32 @@ button, input, textarea { font-family: inherit; font-size: inherit; color: inher
   padding: 18px 16px;
   background: var(--ink);
   border-right: 2px solid var(--ink);
-  overflow: hidden;
+  /* Scroll, do not clip. This column started as brand + models + chats and has
+     since gained a system prompt, a prompt library and a runtime bar. At 768px
+     the later sections were drawing straight over the model cards - the whole
+     suite passed while the sidebar was unusable, because no test can see two
+     things occupying the same pixels. */
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.sidebar::-webkit-scrollbar { width: 8px; }
+.sidebar::-webkit-scrollbar-thumb {
+  background: rgba(237, 233, 225, 0.22);
+  border-radius: var(--r);
+}
+
+/* Sections keep their natural height; only the chat list gives ground, and it
+   has its own scroller. Without this the flex parent shrinks every panel to fit
+   and the overlap comes back in a different form. */
+.sidebar > .panel,
+.sidebar > .brand,
+.sidebar > .runtime-bar,
+.sidebar > .side-foot {
+  flex: none;
+}
+.sidebar > .panel-grow {
+  flex: 1 1 auto;
+  min-height: 120px;
 }
 
 .brand { display: flex; align-items: center; gap: 12px; }
@@ -132,6 +157,35 @@ button, input, textarea { font-family: inherit; font-size: inherit; color: inher
 .runtime-bar.is-working { background: rgba(237, 233, 225, 0.08); border-color: rgba(237, 233, 225, 0.35); }
 .runtime-msg { flex: 1; font-size: 11.5px; line-height: 1.35; color: var(--cream); }
 .runtime-bar .btn { flex: none; }
+
+/* Failure notices live here, outside every list that gets rebuilt. */
+.notice {
+  display: flex; align-items: flex-start; gap: 8px;
+  padding: 8px 10px;
+  background: rgba(237, 233, 225, 0.08);
+  border: 2px solid rgba(237, 233, 225, 0.35);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--r);
+}
+.notice-msg { flex: 1; font-size: 11.5px; line-height: 1.35; color: var(--cream); }
+.notice-x {
+  flex: none;
+  padding: 0 4px;
+  background: none;
+  border: 0;
+  font: inherit;
+  font-size: 15px;
+  line-height: 1;
+  color: rgba(237, 233, 225, 0.60);
+  cursor: pointer;
+}
+.notice-x:hover { color: var(--cream); }
+
+/* The token prompt, when security.token is set and this browser has none yet. */
+.notice-ask { display: flex; flex: 1; flex-direction: column; gap: 6px; }
+.notice-ask .notice-msg { flex: none; }
+.notice-ask .search { font-size: 12px; }
+.notice-ask .btn { align-self: flex-start; }
 
 .model-resident {
   margin-left: auto;
@@ -230,6 +284,34 @@ button, input, textarea { font-family: inherit; font-size: inherit; color: inher
 .fit-tight { color: #E3B341; }
 .fit-spills { color: #E08A6E; }
 .model.is-active .fit { color: var(--cream); }
+
+/* ---------- system prompt + prompt library ---------- */
+
+/* Same dark-panel treatment as .search, because it is the same kind of field
+   in the same sidebar — a second visual language here would read as a
+   different app bolted on. */
+.system-prompt {
+  width: 100%;
+  min-height: 62px;
+  max-height: 160px;
+  padding: 7px 9px;
+  background: rgba(237, 233, 225, 0.06);
+  border: 2px solid rgba(237, 233, 225, 0.28);
+  border-radius: var(--r);
+  color: var(--cream);
+  font-family: var(--font-body);
+  font-size: 12px;
+  line-height: 1.45;
+  resize: vertical;
+}
+.system-prompt::placeholder { color: rgba(237, 233, 225, 0.40); }
+.system-prompt:focus { outline: none; border-color: var(--accent); }
+
+.prompt-lib { display: flex; flex-direction: column; gap: 6px; }
+.prompt-lib .search { font-size: 12px; }
+.prompt-lib-row { display: flex; align-items: stretch; gap: 6px; }
+.prompt-lib-row .search { flex: 1; min-width: 0; }
+.prompt-lib-row .btn { flex: none; }
 
 /* ---------- search + chat list ---------- */
 
@@ -384,8 +466,12 @@ button, input, textarea { font-family: inherit; font-size: inherit; color: inher
 }
 .msg-text pre code { background: none; border: none; color: inherit; padding: 0; }
 
-/* streaming caret — stepped, not a soft pulse */
-.msg-text.is-streaming::after {
+/* streaming caret — stepped, not a soft pulse.
+   The caret has to sit at the end of the last block now that a reply renders as
+   real elements: on the container alone it would drop onto a line of its own
+   below the closing paragraph. `:empty` keeps it visible before the first token. */
+.msg-text.is-streaming:empty::after,
+.msg-text.is-streaming > :last-child::after {
   content: '';
   display: inline-block;
   width: 8px; height: 15px;
@@ -401,6 +487,136 @@ button, input, textarea { font-family: inherit; font-size: inherit; color: inher
   font-size: 11px;
   letter-spacing: 0.03em;
   color: var(--rubble);
+}
+
+/* ---------- rendered markdown ----------
+   What render.js builds out of model output, in both places it is shown: the
+   reply and the reasoning block. Sizes are in em so one rule serves the 15px
+   message and the 13px trace. */
+
+.msg-text p, .think-text p { margin: 0 0 9px; }
+.msg-text > :last-child, .think-text > :last-child { margin-bottom: 0; }
+.msg-text > :first-child, .think-text > :first-child { margin-top: 0; }
+
+.msg-text h1, .msg-text h2, .msg-text h3,
+.msg-text h4, .msg-text h5, .msg-text h6,
+.think-text h1, .think-text h2, .think-text h3,
+.think-text h4, .think-text h5, .think-text h6 {
+  font-family: var(--font-display);
+  font-weight: 400;
+  letter-spacing: 0.06em;
+  line-height: 1.15;
+  margin: 15px 0 7px;
+  color: var(--ink);
+}
+.msg-text h1, .think-text h1 { font-size: 1.5em; }
+.msg-text h2, .think-text h2 { font-size: 1.28em; }
+.msg-text h3, .think-text h3 { font-size: 1.12em; }
+.msg-text h4, .msg-text h5, .msg-text h6,
+.think-text h4, .think-text h5, .think-text h6 { font-size: 1em; }
+/* h1 and h2 carry the rule the sidebar headings do — a hard line, no blur. */
+.msg-text h1, .msg-text h2, .think-text h1, .think-text h2 {
+  padding-bottom: 3px;
+  border-bottom: 2px solid var(--ink);
+}
+
+.msg-text ul, .msg-text ol, .think-text ul, .think-text ol {
+  margin: 8px 0;
+  padding-left: 22px;
+}
+.msg-text li, .think-text li { margin: 2px 0; }
+.msg-text li::marker, .think-text li::marker {
+  color: var(--accent);
+  font-weight: 500;
+}
+.msg-text li > ul, .msg-text li > ol,
+.think-text li > ul, .think-text li > ol { margin: 3px 0 5px; }
+
+.msg-text table, .think-text table {
+  width: 100%;
+  margin: 10px 0;
+  background: var(--cream);
+  border: 2px solid var(--ink);
+  border-radius: var(--r);
+  border-collapse: separate;
+  border-spacing: 0;
+  box-shadow: var(--sh-sm);
+  overflow: hidden;
+  font-size: 0.92em;
+}
+.msg-text th, .msg-text td, .think-text th, .think-text td {
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+  white-space: normal;
+}
+.msg-text th, .think-text th {
+  background: var(--ink);
+  color: var(--cream);
+  font-family: var(--font-display);
+  font-weight: 400;
+  letter-spacing: 0.08em;
+}
+.msg-text td, .think-text td { border-top: 1px solid rgba(26, 26, 24, 0.20); }
+.msg-text th + th, .msg-text td + td,
+.think-text th + th, .think-text td + td { border-left: 1px solid rgba(26, 26, 24, 0.20); }
+.msg-text th + th, .think-text th + th { border-left-color: rgba(237, 233, 225, 0.30); }
+
+.msg-text blockquote, .think-text blockquote {
+  margin: 9px 0;
+  padding: 2px 0 2px 11px;
+  border-left: 4px solid var(--accent);
+  color: var(--stone);
+}
+.msg-text blockquote > :last-child, .think-text blockquote > :last-child { margin-bottom: 0; }
+
+.msg-text hr, .think-text hr {
+  height: 0;
+  margin: 13px 0;
+  border: none;
+  border-top: 2px solid var(--ink);
+}
+
+/* DM Sans stops at 500 here, so bold is weight plus colour, not a fake 700. */
+.msg-text strong, .think-text strong { font-weight: 500; color: var(--ink); }
+.msg-text em, .think-text em { font-style: italic; }
+
+.msg-text a, .think-text a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.msg-text a:hover, .think-text a:hover { color: var(--accent-hover); }
+
+/* The reasoning panel never had rules for the code the models constantly write
+   into it, so a fence there kept the UA default `white-space: pre` and pushed a
+   horizontal scrollbar across the whole trace. Same treatment as a reply, one
+   size down. */
+.think-text pre {
+  margin: 7px 0;
+  padding: 8px 10px;
+  background: var(--ink);
+  color: var(--cream);
+  border-radius: var(--r);
+  overflow-x: auto;
+}
+.think-text code {
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 12px;
+  background: var(--cream-dark);
+  border: 1px solid var(--rubble);
+  border-radius: 3px;
+  padding: 0 3px;
+}
+.think-text pre code { background: none; border: none; color: inherit; padding: 0; }
+
+/* A tag the model wrote, shown inert: dashed, because it is not markup. */
+.msg-text code.raw-tag, .think-text code.raw-tag {
+  padding: 0 4px;
+  border: 1px dashed var(--accent);
+  border-radius: 3px;
+  color: var(--accent);
+  font-size: 0.87em;
 }
 
 /* ---------- reasoning block ---------- */
@@ -488,6 +704,27 @@ kbd {
 }
 .char-count { margin-left: 6px; }
 .char-count.is-long { color: var(--accent); font-weight: 500; }
+
+/* Quiet until it matters: amber as the window fills, accent once turns have
+   actually been left out of the prompt. */
+.context-meter { margin-left: 6px; font-variant-numeric: tabular-nums; }
+.context-meter.is-tight { color: #A9761B; font-weight: 500; }
+.context-meter.is-trimmed { color: var(--accent); font-weight: 600; }
+
+.composer-actions { display: flex; align-items: center; gap: 8px; flex: none; }
+
+/* The Export control is an <a download> so the link works with no script at
+   all; these two rules are the only thing that makes it read as a button. */
+#exportChat {
+  display: inline-block;
+  text-decoration: none;
+  line-height: 1.35;
+}
+#exportChat[aria-disabled='true'] {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: none;
+}
 
 /* ---------- buttons ---------- */
 

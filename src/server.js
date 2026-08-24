@@ -8,11 +8,13 @@
 
 import http from 'node:http';
 import path from 'node:path';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { promises as fs, createReadStream } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
 import { pathToFileURL } from 'node:url';
 import { loadConfig, ROOT } from './util/config.js';
-import { createJsonFileStore } from './core/chat-store.js';
+import { createLogger } from './util/log.js';
+import { countPlaintextChats, openChatStore } from './core/store-open.js';
 import { createRuntime } from './runtime/index.js';
 import { createApi } from './api.js';
 
@@ -33,9 +35,14 @@ export async function createServer(overrides = {}) {
   // Shallow-merging overrides drops sibling keys: {server:{port:0}} would lose
   // `host` and bind 0.0.0.0 on an app whose entire premise is loopback-only.
   const config = mergeConfig(loadConfig(), overrides);
-  const store = createJsonFileStore(config.storage.chatsDir);
+  const log = createLogger({
+    file: config.storage.logFile,
+    maxBytes: config.storage.logMaxBytes,
+  });
+  const { store, encrypted } = openChatStore(config);
   const runtime = createRuntime(config.runtime);
   const api = createApi({ store, runtime, config });
+  const authorised = createTokenGate(config);
 
   const server = http.createServer(async (req, res) => {
     let url;
@@ -53,16 +60,83 @@ export async function createServer(overrides = {}) {
       return;
     }
 
+    // An Origin check alone does not stop DNS rebinding: a page on evil.example
+    // whose name resolves to 127.0.0.1 is same-origin with itself, sends no
+    // cross-origin Origin, and could read every chat on disk. What gives it away
+    // is the Host header, which still says evil.example. Only loopback names are
+    // accepted. (A request with no Host cannot have been rebound to one.)
+    if (req.headers.host && !isLoopbackHost(req.headers.host)) {
+      res.writeHead(403).end('this server only answers to a loopback host name');
+      return;
+    }
+
+    // The third admission check, and the only optional one. It covers /api/
+    // and not the shell: the page has to load for a token to be typed into it,
+    // and everything worth protecting is behind the API anyway.
+    if (url.pathname.startsWith('/api/') && !authorised(req)) {
+      res.writeHead(401, {
+        'www-authenticate': 'Bearer realm="landslide-local"',
+        'content-type': 'application/json; charset=utf-8',
+      });
+      res.end(JSON.stringify({ error: 'authentication required' }));
+      return;
+    }
+
     try {
       if (await api(req, res, url)) return;
-      await serveStatic(req, res, url);
+      await serveStatic(req, res, url, log);
     } catch (err) {
+      // The only record of a 500 used to be the browser's network tab, which is
+      // gone the moment it is closed. The file is what makes a report actionable.
+      log.error('request failed', { method: req.method, path: url.pathname, message: err.message });
       if (!res.headersSent) res.writeHead(500, { 'content-type': 'text/plain' });
       res.end(`server error: ${err.message}`);
     }
   });
 
-  return { server, config, store, runtime };
+  return { server, config, store, runtime, log, encrypted };
+}
+
+/* ------------------------------------------------------------------ */
+/* Admission: the optional bearer token                                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * What this is for, and what it is not.
+ *
+ * The server already answers only to loopback, so the caller is always another
+ * process on this machine. The token separates "the browser the user opened"
+ * from "anything else running under this account" — a script, an extension's
+ * helper, a stray dev server probing 4390. That is the whole of it.
+ *
+ * It is NOT protection from somebody sitting at this keyboard, who can read
+ * config.json, and it is not a login: there is one secret, no accounts, and no
+ * session. With no token configured nothing changes, which is the default.
+ *
+ * @returns {(req: import('node:http').IncomingMessage) => boolean}
+ */
+function createTokenGate(config) {
+  const expected = String(config.security?.token ?? '').trim();
+  if (!expected) return () => true; // opt-in, and off unless asked for
+
+  const wanted = digest(expected);
+  return (req) => {
+    const presented = /^Bearer\s+(.+)$/i.exec(String(req.headers.authorization ?? '').trim());
+    if (!presented) return false;
+    return timingSafeEqual(wanted, digest(presented[1].trim()));
+  };
+}
+
+/**
+ * Compare fixed-width digests rather than the secrets themselves.
+ *
+ * timingSafeEqual throws outright on a length mismatch, so comparing the raw
+ * strings would need a length check first — and that check is itself the leak,
+ * answering "how long is the token" one guess at a time. Two SHA-256 digests are
+ * always 32 bytes, so every wrong answer takes exactly the same path.
+ */
+function digest(secret) {
+  return createHash('sha256').update(String(secret), 'utf8').digest();
 }
 
 function mergeConfig(base, extra) {
@@ -73,16 +147,27 @@ function mergeConfig(base, extra) {
   return out;
 }
 
+const LOOPBACK_NAMES = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
+
 function isLoopback(origin) {
   try {
     const { hostname } = new URL(origin);
-    return hostname === '127.0.0.1' || hostname === 'localhost' || hostname === '::1';
+    return LOOPBACK_NAMES.has(hostname) || LOOPBACK_NAMES.has(`[${hostname}]`);
   } catch {
     return false;
   }
 }
 
-async function serveStatic(req, res, url) {
+/** A Host header is `name` or `name:port`, and may be a bracketed IPv6 literal. */
+function isLoopbackHost(host) {
+  const value = String(host).trim().toLowerCase();
+  const name = value.startsWith('[')
+    ? value.slice(0, value.indexOf(']') + 1)
+    : value.split(':')[0];
+  return LOOPBACK_NAMES.has(name);
+}
+
+async function serveStatic(req, res, url, log) {
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     res.writeHead(405, { allow: 'GET, HEAD' }).end('method not allowed');
     return;
@@ -129,6 +214,7 @@ async function serveStatic(req, res, url) {
     if (!res.writableEnded) res.destroy();
     if (err?.code !== 'ERR_STREAM_PREMATURE_CLOSE') {
       console.error(`static read failed for ${path.basename(target)}: ${err.message}`);
+      log?.error('static read failed', { file: path.basename(target), message: err.message });
     }
   }
 }
@@ -142,8 +228,28 @@ async function serveStatic(req, res, url) {
 const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 
 if (isMain) {
-  const { server, config } = await createServer();
+  const { server, config, log, encrypted } = await createServer();
   const { host, port } = config.server;
+
+  /**
+   * Top-level guards.
+   *
+   * Without these, one rejected promise anywhere — an aborted fetch to Ollama,
+   * a socket that went away mid-stream — takes the whole process down under
+   * Node's default behaviour, ending every open conversation with it and
+   * leaving nothing on disk to say why. A local single-user app should stay up
+   * and write the reason down instead. Both handlers log; neither exits.
+   */
+  process.on('unhandledRejection', (reason) => {
+    const err = reason instanceof Error ? reason : new Error(String(reason));
+    log.error('unhandled rejection', { message: err.message, stack: err.stack });
+    console.error(`  [warn] unhandled rejection: ${err.message} (logged to ${config.storage.logFile})`);
+  });
+
+  process.on('uncaughtException', (err) => {
+    log.error('uncaught exception', { message: err?.message ?? String(err), stack: err?.stack });
+    console.error(`  [warn] uncaught exception: ${err?.message ?? err} (logged to ${config.storage.logFile})`);
+  });
 
   server.on('error', (err) => {
     if (err.code === 'EADDRINUSE') {
@@ -154,19 +260,45 @@ if (isMain) {
     throw err;
   });
 
-  server.listen(port, host, () => {
+  server.listen(port, host, async () => {
     console.log(`\n  Landslide Local`);
     console.log(`  ---------------`);
     console.log(`  UI       http://${host}:${port}`);
     console.log(`  runtime  ${config.runtime.adapter}`);
-    console.log(`  chats    ${config.storage.chatsDir}`);
+    console.log(`  chats    ${config.storage.chatsDir}${encrypted ? '  (encrypted)' : ''}`);
     console.log(`  models   ${config.storage.modelsDir}`);
+    console.log(`  log      ${config.storage.logFile || 'off'}`);
+    console.log(`  api      ${config.security?.token ? 'token required' : 'open on loopback'}`);
     console.log(`\n  Ctrl+C to stop.\n`);
+    log.info('server started', {
+      host,
+      port,
+      adapter: config.runtime.adapter,
+      node: process.versions.node,
+      pid: process.pid,
+      // The fact of a token, never the token. This line goes to a file.
+      encrypted,
+      tokenRequired: Boolean(config.security?.token),
+    });
+
+    // Plain chats in a folder now being read encrypted are invisible, not lost,
+    // and an empty sidebar is the worst possible way to find that out.
+    if (encrypted) {
+      const left = await countPlaintextChats(config.storage.chatsDir);
+      if (left > 0) {
+        console.warn(
+          `  [warn] ${left} un-encrypted chat file(s) in that folder are not shown.\n` +
+            `         Move them across with:  npm run encrypt-chats\n`,
+        );
+      }
+    }
   });
 
   for (const sig of ['SIGINT', 'SIGTERM']) {
     process.on(sig, () => {
-      server.close(() => process.exit(0));
+      log.info('shutting down', { signal: sig });
+      // Give the log a moment to reach disk, but never let it hold the exit.
+      log.flush().finally(() => server.close(() => process.exit(0)));
       setTimeout(() => process.exit(0), 2000).unref();
     });
   }

@@ -2,66 +2,89 @@
  * Landslide Local — front end.
  *
  * Deliberately dependency-free and framework-free: it must run from a folder on
- * a disk with no network. State lives on the server; this file renders it and
- * streams replies.
+ * a disk with no network. State lives on the server; this file boots the page,
+ * loads that state, and wires the controls to the modules that own each part of
+ * it.
  *
- * Model output is never inserted as HTML. The only rich rendering is fenced code
- * and inline code, both built as DOM nodes from escaped text.
+ * Model output is never inserted as HTML. All message rendering lives in
+ * render.js, which parses the markdown the models write and builds the elements
+ * itself out of text nodes — nothing from a model is ever handed to the DOM as
+ * markup. Each model's `format` profile from the catalog is passed through with
+ * the text, so a reasoning trace and a page of prose are read differently.
+ *
+ * What used to be one file is now one module per part of the page. The seams are
+ * the ones the page already had:
+ *
+ *   dom.js           the element table, the shared state, and the notice bar
+ *   api-client.js    every request to this app's own API, and the token prompt
+ *   models.js        the model rail and the runtime bar
+ *   sidebar.js       the chat list
+ *   chats.js         create / open / delete / regenerate
+ *   message-view.js  a conversation as nodes, plus the context meter
+ *   stream.js        one reply, from request to composer coming back
+ *   prompts.js       the system prompt and its library
+ *   render.js        markdown -> DOM, and the only module allowed to do it
  */
 
-const $ = (id) => document.getElementById(id);
-
-const els = {
-  runtimeState: $('runtimeState'),
-  modelList: $('modelList'),
-  chatList: $('chatList'),
-  chatSearch: $('chatSearch'),
-  newChat: $('newChat'),
-  thread: $('thread'),
-  emptyState: $('emptyState'),
-  emptyFacts: $('emptyFacts'),
-  composer: $('composer'),
-  prompt: $('prompt'),
-  send: $('send'),
-  charCount: $('charCount'),
-  statusBar: $('statusBar'),
-  statusLabel: $('statusLabel'),
-  statusMeta: $('statusMeta'),
-  timer: $('timer'),
-  stopBtn: $('stopBtn'),
-  storageHint: $('storageHint'),
-  runtimeBar: $('runtimeBar'),
-  runtimeMsg: $('runtimeMsg'),
-  startRuntime: $('startRuntime'),
-  tpl: $('tpl-message'),
-};
-
-const state = {
-  models: [],
-  chats: [],
-  modelId: localStorage.getItem('ls.modelId') || null,
-  chatId: null,
-  busy: false,
-  loaded: [],
-  runtimeUp: false,
-  abort: null,
-  timerHandle: null,
-  startedAt: 0,
-};
+import { apiFetch } from './api-client.js';
+import { newChat, regenerateReply, startNewChat } from './chats.js';
+import { clearNotice, currentModel, els, mountDom, notify, state } from './dom.js';
+import { buildMessage, updateChatActions } from './message-view.js';
+import {
+  moveModelSelection,
+  refreshRuntime,
+  renderFacts,
+  renderModels,
+  renderRuntime,
+  runtimeSignature,
+  startRuntime,
+} from './models.js';
+import { deletePrompt, loadPrompts, savePrompt, saveSystemPrompt, systemPromptText, usePrompt } from './prompts.js';
+import { loadChats } from './sidebar.js';
+import { streamReply } from './stream.js';
 
 /* ---------------- boot ---------------- */
 
-init().catch((err) => fail(`Could not start: ${err.message}`));
+/**
+ * In a browser this module still starts itself the moment it is imported — the
+ * `<script type="module">` at the end of index.html loads it after the elements
+ * above exist, exactly as before.
+ *
+ * There is no `window` under Node, and that is the whole point of the guard:
+ * `test/ui.test.js` builds a DOM from the real index.html, imports this file
+ * against it and calls `init()` itself, so a full send/stream/render cycle can
+ * be driven and awaited with no human and no browser present. Booting on import
+ * would leave that test racing a promise it has no handle on.
+ */
+if (typeof window !== 'undefined') {
+  init().catch((err) => fail(`Could not start: ${err.message}`));
+}
 
-async function init() {
+export async function init() {
+  // Bind the element table to THIS document before anything reads it.
+  mountDom();
   await loadState();
   await loadChats();
+  await loadPrompts();
   wireEvents();
   autoGrow();
+  updateChatActions();
 }
 
 async function loadState() {
-  const res = await fetch('/api/state');
+  const res = await apiFetch('/api/state');
+  // Boot used to walk straight into `data.models[0]` on the assumption that a
+  // server on this machine always answers. A refused token is a 401 with a JSON
+  // body, and reading it as state turned an expected outcome into a TypeError
+  // where the reason should be.
+  if (!res.ok) {
+    const payload = await res.json().catch(() => null);
+    throw new Error(
+      res.status === 401
+        ? 'this server needs an access token — reload and paste it in'
+        : (payload?.error ?? `the server answered ${res.status}`),
+    );
+  }
   const data = await res.json();
   state.models = data.models;
 
@@ -69,403 +92,14 @@ async function loadState() {
     state.modelId = state.models[0].id;
   }
 
-  state.runtimeUp = data.runtime.ok;
-  state.loaded = data.supervisor?.loaded ?? [];
-  renderRuntime(data);
+  state.hardwareLabel = data.hardware.label;
+  const view = data.supervisor ?? {};
+  state.runtimeSig = runtimeSignature(view);
+  renderRuntime(view);
   renderModels();
   renderFacts(data);
-  state.hardwareLabel = data.hardware.label;
   els.storageHint.textContent = data.chatsDir;
   els.storageHint.title = data.chatsDir;
-}
-
-function renderRuntime(data) {
-  const r = data.runtime;
-  const sup = data.supervisor ?? {};
-  state.runtimeUp = r.ok;
-  state.loaded = sup.loaded ?? [];
-
-  els.runtimeState.textContent = r.ok
-    ? `${r.adapter} ready · ${data.hardware.label}`
-    : `${r.adapter} not running`;
-  els.runtimeState.className = `runtime-state ${r.ok ? 'is-ok' : 'is-bad'}`;
-  els.runtimeState.title = r.ok ? (sup.version ? `v${sup.version}` : '') : (r.error ?? '');
-
-  if (r.ok) {
-    els.runtimeBar.hidden = true;
-  } else {
-    els.runtimeBar.hidden = false;
-    els.runtimeBar.classList.remove('is-working');
-    els.runtimeMsg.textContent = sup.canStart
-      ? 'The model server is not running. Nothing will answer until it is.'
-      : 'Ollama is not running and its executable was not found. Set runtime.ollamaBin in config.json.';
-    els.startRuntime.hidden = !sup.canStart;
-    els.startRuntime.disabled = false;
-    els.startRuntime.textContent = 'Start Ollama';
-  }
-}
-
-const isResident = (id) => state.loaded.some((m) => m.name === id || m.name === `${id}:latest`);
-
-async function refreshRuntime() {
-  try {
-    const { runtime } = await (await fetch('/api/runtime')).json();
-    const wasUp = state.runtimeUp;
-    state.runtimeUp = runtime.running;
-    state.loaded = runtime.loaded ?? [];
-    renderRuntime({
-      runtime: { ok: runtime.running, adapter: 'ollama', error: 'not reachable' },
-      supervisor: runtime,
-      hardware: { label: state.hardwareLabel ?? '' },
-    });
-    renderModels();
-    if (!wasUp && runtime.running) await loadChats(els.chatSearch.value);
-  } catch {
-    /* a failed poll is not worth surfacing */
-  }
-}
-
-async function startRuntime() {
-  els.startRuntime.disabled = true;
-  els.startRuntime.textContent = 'Starting';
-  els.runtimeBar.classList.add('is-working');
-  els.runtimeMsg.textContent = 'Launching Ollama and waiting for it to answer...';
-
-  try {
-    const { result } = await (await fetch('/api/runtime/start', { method: 'POST' })).json();
-    if (result.ok) {
-      els.runtimeMsg.textContent = `Ollama ${result.version} is up.`;
-      await refreshRuntime();
-    } else {
-      els.runtimeBar.classList.remove('is-working');
-      els.runtimeMsg.textContent = result.error ?? 'Could not start Ollama.';
-      els.startRuntime.disabled = false;
-      els.startRuntime.textContent = 'Try again';
-    }
-  } catch (err) {
-    els.runtimeBar.classList.remove('is-working');
-    els.runtimeMsg.textContent = String(err.message ?? err);
-    els.startRuntime.disabled = false;
-    els.startRuntime.textContent = 'Try again';
-  }
-}
-
-async function warmModel(id, button) {
-  button.disabled = true;
-  button.textContent = 'Loading';
-  const { result } = await (
-    await fetch('/api/runtime/warm', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ modelId: id }),
-    })
-  ).json();
-  button.textContent = result.ok ? 'Ready' : 'Failed';
-  await refreshRuntime();
-}
-
-function renderFacts(data) {
-  const rows = [
-    ['Models bundled', `${data.models.length} · ${data.totalSizeGb} GiB`],
-    ['Model folder', data.modelsDir],
-    ['Chats saved to', data.chatsDir],
-    ['Network', 'none — everything is local'],
-  ];
-  els.emptyFacts.replaceChildren(
-    ...rows.map(([k, v]) => {
-      const li = document.createElement('li');
-      const b = document.createElement('b');
-      b.textContent = k;
-      const s = document.createElement('span');
-      s.textContent = v;
-      li.append(b, s);
-      return li;
-    }),
-  );
-}
-
-/* ---------------- models ---------------- */
-
-function renderModels() {
-  els.modelList.replaceChildren(
-    ...state.models.map((m) => {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = `model${m.id === state.modelId ? ' is-active' : ''}`;
-      btn.setAttribute('role', 'radio');
-      btn.setAttribute('aria-checked', String(m.id === state.modelId));
-      btn.title = `${m.blurb}\n\n${m.quant} · ${m.sizeGb} GB · ${m.fit.note}`;
-
-      const top = document.createElement('div');
-      top.className = 'model-top';
-      const name = document.createElement('span');
-      name.className = 'model-name';
-      name.textContent = m.name;
-      const params = document.createElement('span');
-      params.className = 'model-params';
-      params.textContent = m.params;
-      top.append(name, params);
-
-      const tag = document.createElement('div');
-      tag.className = 'model-tag';
-      tag.textContent = m.tagline;
-
-      const meta = document.createElement('div');
-      meta.className = 'model-meta';
-      const fit = document.createElement('span');
-      fit.className = `fit fit-${m.fit.verdict}`;
-      fit.textContent = m.fit.verdict;
-      const size = document.createElement('span');
-      size.textContent = `${m.sizeGb} GB`;
-      const mode = document.createElement('span');
-      mode.textContent = m.thinks ? 'reasons' : 'instant';
-      meta.append(fit, size, mode);
-
-      // Loading a 9B off disk costs about 20 seconds. Show whether it is already
-      // resident, and offer to put it there before the first message rather than
-      // during it.
-      if (isResident(m.id)) {
-        const res = document.createElement('span');
-        res.className = 'model-resident';
-        res.textContent = 'in VRAM';
-        meta.append(res);
-      } else if (state.runtimeUp) {
-        const warm = document.createElement('button');
-        warm.type = 'button';
-        warm.className = 'model-warm';
-        warm.textContent = 'Preload';
-        warm.title = `Load ${m.name} into VRAM now so the first message is instant`;
-        warm.addEventListener('click', (e) => {
-          e.stopPropagation();
-          warmModel(m.id, warm);
-        });
-        meta.append(warm);
-      }
-
-      btn.append(top, tag, meta);
-      btn.addEventListener('click', () => selectModel(m.id));
-      return btn;
-    }),
-  );
-}
-
-function selectModel(id) {
-  state.modelId = id;
-  localStorage.setItem('ls.modelId', id);
-  renderModels();
-  if (state.chatId) {
-    fetch(`/api/chats/${state.chatId}`, {
-      method: 'PATCH',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ modelId: id }),
-    }).catch(() => {});
-  }
-  els.prompt.focus();
-}
-
-const currentModel = () => state.models.find((m) => m.id === state.modelId);
-
-/* ---------------- chats ---------------- */
-
-async function loadChats(query = '') {
-  const url = query ? `/api/chats?q=${encodeURIComponent(query)}` : '/api/chats';
-  const res = await fetch(url);
-  state.chats = (await res.json()).chats;
-  renderChats();
-}
-
-function renderChats() {
-  if (state.chats.length === 0) {
-    const p = document.createElement('p');
-    p.className = 'chat-sub';
-    p.style.padding = '6px 8px';
-    p.textContent = els.chatSearch.value ? 'No matches.' : 'No chats yet.';
-    els.chatList.replaceChildren(p);
-    return;
-  }
-
-  els.chatList.replaceChildren(
-    ...state.chats.map((c) => {
-      const row = document.createElement('div');
-      row.className = `chat-row${c.id === state.chatId ? ' is-active' : ''}`;
-      row.setAttribute('role', 'listitem');
-
-      const main = document.createElement('div');
-      main.className = 'chat-main';
-      const t = document.createElement('div');
-      t.className = 'chat-title';
-      t.textContent = c.title;
-      const s = document.createElement('div');
-      s.className = 'chat-sub';
-      const model = state.models.find((m) => m.id === c.modelId);
-      s.textContent = `${c.messageCount} msg${c.messageCount === 1 ? '' : 's'}${model ? ` · ${model.name}` : ''}`;
-      main.append(t, s);
-
-      const del = document.createElement('button');
-      del.className = 'chat-del';
-      del.type = 'button';
-      del.textContent = '×';
-      del.title = 'Delete chat';
-      del.setAttribute('aria-label', `Delete ${c.title}`);
-      del.addEventListener('click', (e) => {
-        e.stopPropagation();
-        deleteChat(c.id);
-      });
-
-      row.append(main, del);
-      row.addEventListener('click', () => openChat(c.id));
-      return row;
-    }),
-  );
-}
-
-async function newChat() {
-  const res = await fetch('/api/chats', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ modelId: state.modelId }),
-  });
-  const { chat } = await res.json();
-  state.chatId = chat.id;
-  await loadChats(els.chatSearch.value);
-  renderThread(chat);
-  els.prompt.focus();
-}
-
-async function openChat(id) {
-  const res = await fetch(`/api/chats/${id}`);
-  if (!res.ok) return;
-  const { chat } = await res.json();
-  state.chatId = chat.id;
-  if (chat.modelId && state.models.some((m) => m.id === chat.modelId)) {
-    state.modelId = chat.modelId;
-    localStorage.setItem('ls.modelId', chat.modelId);
-    renderModels();
-  }
-  renderChats();
-  renderThread(chat);
-  els.prompt.focus();
-}
-
-async function deleteChat(id) {
-  await fetch(`/api/chats/${id}`, { method: 'DELETE' });
-  if (state.chatId === id) {
-    state.chatId = null;
-    els.thread.replaceChildren(els.emptyState);
-    els.emptyState.hidden = false;
-  }
-  await loadChats(els.chatSearch.value);
-}
-
-/* ---------------- thread rendering ---------------- */
-
-function renderThread(chat) {
-  els.thread.replaceChildren();
-  if (chat.messages.length === 0) {
-    els.emptyState.hidden = false;
-    els.thread.append(els.emptyState);
-    return;
-  }
-  for (const m of chat.messages) {
-    els.thread.append(buildMessage(m.role, m.content, m.thinking, m.stats));
-  }
-  scrollToEnd();
-}
-
-function buildMessage(role, content = '', thinking = '', stats = null) {
-  const node = els.tpl.content.firstElementChild.cloneNode(true);
-  node.classList.add(role === 'user' ? 'msg-user' : 'msg-assistant');
-  node.querySelector('.msg-role').textContent = role === 'user' ? 'You' : (currentModel()?.name ?? 'Model');
-
-  const think = node.querySelector('.think');
-  if (thinking) {
-    think.hidden = false;
-    node.querySelector('.think-text').textContent = thinking;
-  }
-
-  renderText(node.querySelector('.msg-text'), content);
-  if (stats) node.querySelector('.msg-stats').textContent = statLine(stats);
-  return node;
-}
-
-/** Sub-second values read as "0.0s", which looks broken. Show ms below 1s. */
-function dur(ms) {
-  return ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(1)}s`;
-}
-
-function statLine(s) {
-  const bits = [];
-  if (s.totalMs != null) bits.push(`${dur(s.totalMs)} total`);
-  if (s.firstTokenMs != null) bits.push(`${dur(s.firstTokenMs)} to first token`);
-  if (s.tokens) bits.push(`${s.tokens} tokens`);
-  if (s.tokensPerSecond) bits.push(`${s.tokensPerSecond} tok/s`);
-  return bits.join('  ·  ');
-}
-
-/** Fenced and inline code only, all built from text nodes. Never innerHTML. */
-function renderText(el, text) {
-  el.replaceChildren();
-  const parts = String(text).split(/```/);
-  parts.forEach((part, i) => {
-    if (i % 2 === 1) {
-      const pre = document.createElement('pre');
-      const code = document.createElement('code');
-      code.textContent = part.replace(/^[a-zA-Z0-9+-]*\n/, '');
-      pre.append(code);
-      el.append(pre);
-    } else {
-      appendInline(el, part);
-    }
-  });
-}
-
-function appendInline(el, text) {
-  const chunks = String(text).split(/`/);
-  chunks.forEach((chunk, i) => {
-    if (i % 2 === 1) {
-      const code = document.createElement('code');
-      code.textContent = chunk;
-      el.append(code);
-    } else if (chunk) {
-      el.append(document.createTextNode(chunk));
-    }
-  });
-}
-
-/**
- * Rebuilding the entire subtree from the full accumulated answer on every token
- * is quadratic — a 4,000-token reply meant 4,000 rebuilds of a growing string.
- * renderText only treats backticks specially, so a chunk without one can be
- * appended to the trailing text node in constant time.
- */
-function appendStream(el, fullText, chunk) {
-  if (chunk.includes('`')) {
-    renderText(el, fullText);
-    return;
-  }
-  const last = el.lastChild;
-  if (last && last.nodeType === Node.TEXT_NODE) last.appendData(chunk);
-  else el.append(document.createTextNode(chunk));
-}
-
-let thinkScrollQueued = false;
-function scheduleThinkScroll(el) {
-  if (thinkScrollQueued) return;
-  thinkScrollQueued = true;
-  requestAnimationFrame(() => {
-    thinkScrollQueued = false;
-    el.scrollTop = el.scrollHeight;
-  });
-}
-
-let endScrollQueued = false;
-function scrollToEnd() {
-  if (endScrollQueued) return;
-  endScrollQueued = true;
-  requestAnimationFrame(() => {
-    endScrollQueued = false;
-    els.thread.scrollTop = els.thread.scrollHeight;
-  });
 }
 
 /* ---------------- sending ---------------- */
@@ -475,153 +109,34 @@ async function send(text) {
   state.busy = true; // claim synchronously: `await newChat()` below yields, and
   // Enter autorepeat walks straight into the gap, creating two chats and two
   // concurrent streams that overwrite each other's abort handle and timer.
-  if (!state.chatId) await newChat();
+  if (!state.chatId) {
+    try {
+      await newChat();
+    } catch (err) {
+      // The claim above is only safe if every path out of here releases it.
+      // It did not: a failed create threw before setBusy(true) ever ran, so
+      // busy stayed true, the composer stayed dead and only a reload recovered.
+      state.busy = false;
+      notify(`Could not start a chat: ${err.message ?? err}. Your message was not sent.`);
+      els.prompt.value = text;
+      updateCount();
+      autoGrow();
+      els.prompt.focus();
+      return;
+    }
+  }
 
   const model = currentModel();
   els.emptyState.hidden = true;
   if (els.thread.contains(els.emptyState)) els.thread.removeChild(els.emptyState);
 
   els.thread.append(buildMessage('user', text));
-  const reply = buildMessage('assistant', '');
-  const replyText = reply.querySelector('.msg-text');
-  const think = reply.querySelector('.think');
-  const thinkText = reply.querySelector('.think-text');
-  const thinkTime = reply.querySelector('.think-time');
-  const statsEl = reply.querySelector('.msg-stats');
-  replyText.classList.add('is-streaming');
-  els.thread.append(reply);
-  scrollToEnd();
-
-  setBusy(true, model.thinks ? 'Thinking' : 'Writing');
-
-  state.abort = new AbortController();
-  let answer = '';
-  let reasoning = '';
-  let sawAnswer = false;
-  let thinkStartedAt = performance.now();
-
-  try {
-    const res = await fetch(`/api/chats/${state.chatId}/message`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      signal: state.abort.signal,
-      body: JSON.stringify({ content: text, modelId: model.id }),
-    });
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: `server returned ${res.status}` }));
-      throw new Error(err.error);
-    }
-
-    for await (const event of sseEvents(res.body)) {
-      if (event.type === 'think') {
-        reasoning += event.text;
-        think.hidden = false;
-        if (!sawAnswer) think.open = true; // watch it reason, then get out of the way
-        // Append, never re-assign: a real model emits thousands of reasoning
-        // tokens, and replacing textContent each time is quadratic. Reading
-        // scrollHeight here forced a synchronous reflow per token on top of it,
-        // which was enough to lock the renderer on a long reasoning pass.
-        appendStream(thinkText, reasoning, event.text);
-        scheduleThinkScroll(thinkText);
-        els.statusLabel.textContent = 'Thinking';
-      } else if (event.type === 'answer') {
-        if (!sawAnswer) {
-          sawAnswer = true;
-          els.statusLabel.textContent = 'Writing';
-          if (reasoning) {
-            thinkTime.textContent = dur(performance.now() - thinkStartedAt);
-            think.open = false;
-          }
-        }
-        answer += event.text;
-        appendStream(replyText, answer, event.text);
-        replyText.classList.add('is-streaming');
-        scrollToEnd();
-      } else if (event.type === 'stats') {
-        els.statusMeta.textContent = `${event.stats.tokens} tok · ${event.stats.tokensPerSecond} tok/s`;
-      } else if (event.type === 'done') {
-        statsEl.textContent = statLine(event.stats) + (event.aborted ? '  ·  stopped' : '');
-        await loadChats(els.chatSearch.value);
-      } else if (event.type === 'error') {
-        throw new Error(event.message);
-      }
-    }
-  } catch (err) {
-    if (err.name !== 'AbortError') {
-      reply.classList.add('msg-error');
-      renderText(replyText, answer ? `${answer}\n\n[${err.message}]` : `[${err.message}]`);
-    }
-  } finally {
-    replyText.classList.remove('is-streaming');
-    if (!answer && !reasoning && !reply.classList.contains('msg-error')) {
-      renderText(replyText, '[no output]');
-    }
-    setBusy(false);
-    state.abort = null;
-    scrollToEnd();
-  }
-}
-
-async function* sseEvents(body) {
-  const reader = body.getReader();
-  const dec = new TextDecoder();
-  let buf = '';
-  try {
-    yield* readFrames(reader, dec, buf);
-  } finally {
-    // An error thrown by the consumer (an SSE 'error' event) would otherwise
-    // leave the reader locked and the body never cancelled.
-    try {
-      await reader.cancel();
-    } catch {
-      /* already closed */
-    }
-  }
-}
-
-async function* readFrames(reader, dec, buf) {
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buf += dec.decode(value, { stream: true });
-    let idx;
-    while ((idx = buf.indexOf('\n\n')) !== -1) {
-      const frame = buf.slice(0, idx);
-      buf = buf.slice(idx + 2);
-      for (const line of frame.split('\n')) {
-        if (!line.startsWith('data: ')) continue;
-        try {
-          yield JSON.parse(line.slice(6));
-        } catch {
-          /* ignore a malformed frame rather than killing the stream */
-        }
-      }
-    }
-  }
-}
-
-/* ---------------- busy state + timer ---------------- */
-
-function setBusy(busy, label = 'Thinking') {
-  state.busy = busy;
-  clearInterval(state.timerHandle); // never leave an orphaned interval ticking
-  state.timerHandle = null;
-  els.send.disabled = busy;
-  els.prompt.disabled = busy;
-  els.statusBar.hidden = !busy;
-
-  if (busy) {
-    els.statusLabel.textContent = label;
-    els.statusMeta.textContent = '';
-    state.startedAt = performance.now();
-    els.timer.textContent = '0.0s';
-    state.timerHandle = setInterval(() => {
-      els.timer.textContent = `${((performance.now() - state.startedAt) / 1000).toFixed(1)}s`;
-    }, 100);
-  } else {
-    els.prompt.focus();
-  }
+  await saveSystemPrompt();
+  await streamReply({
+    path: `/api/chats/${state.chatId}/message`,
+    payload: { content: text, modelId: model.id, systemPrompt: systemPromptText() },
+    model,
+  });
 }
 
 function fail(message) {
@@ -654,11 +169,26 @@ function wireEvents() {
     updateCount();
   });
 
+  // `a` is in this list for the Export link: swallowing its mousedown would
+  // take focus off it, and a download link the keyboard cannot reach is the
+  // same defect this item is fixing everywhere else.
   els.composer.addEventListener('mousedown', (e) => {
-    if (e.target.closest('button, kbd, textarea')) return;
+    if (e.target.closest('button, kbd, textarea, a')) return;
     e.preventDefault();
     els.prompt.focus();
   });
+
+  els.modelList.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    e.preventDefault();
+    moveModelSelection(e.key === 'ArrowDown' ? 1 : -1);
+  });
+
+  els.systemPrompt.addEventListener('change', () => saveSystemPrompt());
+  els.promptLibrary.addEventListener('change', () => usePrompt());
+  els.savePrompt.addEventListener('click', () => savePrompt());
+  els.deletePrompt.addEventListener('click', () => deletePrompt());
+  els.regenerate.addEventListener('click', () => regenerateReply());
 
   els.startRuntime.addEventListener('click', () => startRuntime());
   setInterval(() => {
@@ -666,7 +196,8 @@ function wireEvents() {
   }, 12000);
 
   els.stopBtn.addEventListener('click', () => state.abort?.abort());
-  els.newChat.addEventListener('click', () => newChat());
+  els.newChat.addEventListener('click', () => startNewChat());
+  els.noticeDismiss.addEventListener('click', () => clearNotice());
 
   let searchTimer;
   els.chatSearch.addEventListener('input', () => {
@@ -682,7 +213,7 @@ function wireEvents() {
     }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'n') {
       e.preventDefault();
-      newChat();
+      startNewChat();
     }
     if (e.key === 'Escape' && state.busy) state.abort?.abort();
   });
