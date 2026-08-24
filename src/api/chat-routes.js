@@ -21,6 +21,10 @@ import { EVENT } from '../../public/shared/events.js';
 import { httpError, openSse } from './http.js';
 import { requireModel } from './catalog-guard.js';
 
+/** The widest thing that is still plausibly a model tag: Ollama's own
+    `name:tag` form, plus the catalog's kebab ids. */
+const MODEL_ID_RE = /^[A-Za-z0-9._:-]{1,64}$/;
+
 export function createChatRoutes({ store, runtime }) {
   async function listChats(_m, _b, url) {
     const q = url.searchParams.get('q');
@@ -51,6 +55,18 @@ export function createChatRoutes({ store, runtime }) {
     }
     if ('systemPrompt' in patch && patch.systemPrompt !== null && typeof patch.systemPrompt !== 'string') {
       throw httpError(400, 'systemPrompt must be a string');
+    }
+    // Shape, not catalog membership. A chat may legitimately name a model this
+    // build no longer ships - a restored backup, a retired entry in models.json
+    // - and the generation path already refuses to RUN anything the catalog
+    // does not know, via requireModel(). What was missing was any bound at all:
+    // title, systemPrompt and options were each cleaned or checked here and
+    // modelId was written through verbatim, so a 400-character id with an RTL
+    // override reached the page and the export.
+    if ('modelId' in patch && patch.modelId !== null) {
+      if (typeof patch.modelId !== 'string' || !MODEL_ID_RE.test(patch.modelId)) {
+        throw httpError(400, 'modelId must be up to 64 characters of letters, digits, dot, colon, dash or underscore');
+      }
     }
     return { chat: await store.updateChat(match[1], patch) };
   }

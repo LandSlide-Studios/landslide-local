@@ -55,8 +55,12 @@ export function toMarkdown(chat) {
     // the exported file — the copy that leaves this machine and outlives the
     // app — reattributed every earlier reply to whatever model the chat had
     // last been switched to.
+    // Marked per heading, not only once at the top. A note saying "some replies"
+    // raises a question the file then gives the reader no way to answer - three
+    // identical headings, one of them a fact and two of them guesses.
+    const inferred = m.role !== 'user' && !m.modelId;
     const author = m.role === 'user' ? 'You' : (m.modelId ?? chat?.modelId ?? 'Model');
-    out.push(`## ${author}`, '');
+    out.push(`## ${author}${inferred && chat?.modelId ? ' (assumed)' : ''}`, '');
     if (m.thinking) {
       // A reasoning trace is context, not the answer, and it is routinely
       // longer than the answer it produced. Collapsed keeps the export

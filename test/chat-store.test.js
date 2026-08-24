@@ -6,7 +6,7 @@ import path from 'node:path';
 import { createEncryptedFileStore, createJsonFileStore, createMemoryStore, newId } from '../src/core/chat-store.js';
 
 /**
- * One contract suite, run against both adapters. If an adapter drifts from the
+ * One contract suite, run against all three adapters. If an adapter drifts from the
  * interface, the seam is what breaks — which is exactly what we want to catch.
  */
 const adapters = [
@@ -207,15 +207,32 @@ test('[jsonfile] leaves no temp files behind', async () => {
   await fs.rm(dir, { recursive: true, force: true });
 });
 
-test('[jsonfile] chats persist across store instances', async () => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ls-persist-'));
-  const first = createJsonFileStore(dir);
-  const { id } = await first.create({ title: 'durable' });
-  await first.appendMessage(id, { role: 'user', content: 'written once' });
+/**
+ * Restart durability, for every adapter that has a disk to restart from.
+ *
+ * It was jsonfile-only, which left it off the one adapter where it is load
+ * bearing: the encrypted codec has to re-derive its key from a salt it adopts
+ * out of an existing file. If that broke, every chat would be undecryptable on
+ * the next launch and the suite would not have noticed.
+ */
+for (const [label, make] of adapters.filter(([name]) => name !== 'memory')) {
+  test(`[${label}] chats persist across store instances`, async () => {
+    const { store, dir, cleanup } = await make();
+    const { id } = await store.create({ title: 'survives a restart', modelId: 'deckard-4b' });
+    await store.appendMessage(id, { role: 'user', content: 'before the restart' });
+    await store.appendMessage(id, { role: 'assistant', content: 'a reply', modelId: 'cold-fusion-9b' });
 
-  const second = createJsonFileStore(dir);
-  const reloaded = await second.get(id);
-  assert.equal(reloaded.title, 'durable', 'an explicit title is never overwritten by auto-titling');
-  assert.equal(reloaded.messages[0].content, 'written once');
-  await fs.rm(dir, { recursive: true, force: true });
-});
+    // A second instance over the same folder is what a relaunch actually is.
+    const reopened =
+      label === 'encrypted'
+        ? createEncryptedFileStore(dir, { passphrase: 'contract-suite-passphrase' })
+        : createJsonFileStore(dir);
+    const read = await reopened.get(id);
+    assert.equal(read.title, 'survives a restart');
+    assert.equal(read.messages.length, 2);
+    assert.equal(read.messages[1].content, 'a reply');
+    assert.equal(read.messages[1].modelId, 'cold-fusion-9b', 'attribution has to survive a restart too');
+    assert.equal((await reopened.list()).length, 1);
+    await cleanup();
+  });
+}

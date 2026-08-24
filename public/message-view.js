@@ -8,7 +8,7 @@
  * disagreeing is a bug the user experiences as "it broke, then it fixed itself".
  */
 
-import { NO_OUTPUT, currentModel, els, modelById, scrollToEnd, state, statLine } from './dom.js';
+import { NO_OUTPUT, els, modelById, scrollToEnd, state, statLine } from './dom.js';
 import { renderText } from './render.js';
 
 /* ---------------- context meter + chat actions ---------------- */
@@ -44,15 +44,15 @@ function renderContext(context) {
 
 /**
  * Name the model that wrote a reply, and hand back the format profile to
- * render it with. Three cases, and the third is the reason this is a function.
+ * render it with. Four cases, and the last two are why this is a function.
  *
  *   - The message names a model this build ships: use it, plainly.
- *   - The message names a model that is no longer in the catalog: show the id
- *     rather than a friendly name we no longer have. It is still the truth.
- *   - The message names nothing, because it was written before replies carried
- *     a model. The chat's model is the best available guess, so show it dimmed
- *     and say in the tooltip that it IS a guess. Presenting a guess in the same
+ *   - The message names a model no longer in the catalog: show the id rather
+ *     than a friendly name we no longer have. It is still the truth.
+ *   - The message names nothing and the chat does: the chat's model is the best
+ *     available guess, so show it MARKED as one. Presenting a guess in the same
  *     style as a fact is the bug this whole item exists to fix, only quieter.
+ *   - Neither names anything: say "Model" and claim nothing.
  */
 function labelMessage(roleEl, modelId, chatModelId) {
   if (modelId) {
@@ -72,13 +72,19 @@ function labelMessage(roleEl, modelId, chatModelId) {
   const inferred = modelById(chatModelId);
   roleEl.textContent = inferred?.name ?? chatModelId;
   roleEl.classList.add('is-inferred');
-  const caveat =
+  // `title` is the mouse affordance and reaches nothing else. `aria-label` was
+  // the first attempt at the rest and is prohibited here: the role cell is a
+  // bare div, which maps to role=generic, and generic takes no accessible name
+  // — so the caveat would have been announced by nobody. Real text inside the
+  // element needs no ARIA to be read, and stays short because on a chat that
+  // predates the field EVERY reply carries it.
+  roleEl.title =
     "This chat's model. This reply was written before replies recorded their own " +
     'model, so which one actually produced it was never saved.';
-  roleEl.title = caveat;
-  // `title` alone reaches a mouse and nothing else. The accessible name carries
-  // the same caveat so it is not mouse-only.
-  roleEl.setAttribute('aria-label', `${roleEl.textContent} — ${caveat}`);
+  const note = document.createElement('span');
+  note.className = 'sr-only';
+  note.textContent = ' (model not recorded)';
+  roleEl.append(note);
   return inferred?.format;
 }
 

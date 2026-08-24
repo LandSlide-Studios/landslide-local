@@ -866,10 +866,102 @@ test('a reply written before models were recorded is shown as a guess, not as a 
     assert.equal(roles[0].className.includes('is-inferred'), false, 'the stamped reply is known');
     assert.equal(roles[1].className.includes('is-inferred'), true, 'the unstamped one must be marked as inferred');
     assert.match(
-      roles[1].getAttribute('aria-label') ?? '',
-      /never saved/,
-      'the caveat must reach the accessible name, not only a mouse-only title',
+      roles[1].textContent,
+      /model not recorded/,
+      'the caveat must be real text: the role cell is role=generic, which takes no accessible name, ' +
+        'so an aria-label on it would be announced by nobody',
     );
+    assert.match(
+      roles[1].getAttribute('title') ?? '',
+      /never saved/,
+      'and the mouse affordance has to survive too',
+    );
+  } finally {
+    await page.close();
+  }
+});
+
+/**
+ * The narrow case the coarse revert could not see.
+ *
+ * Removing labelMessage entirely turns the other two tests red, but the
+ * defect this guards is one token: `modelById(chatModelId) ?? currentModel()`.
+ * With every chat pointing at a catalogued model the fallback branch never
+ * runs, so that mutation stayed green through two review rounds. This chat
+ * points at a model the catalog does not have.
+ */
+test('a chat naming a retired model never borrows the label from the rail', async () => {
+  const page = await mount({ script: SCRIPTED, delayMs: 4, chunkSize: 8 });
+  try {
+    const thread = page.byId('thread');
+    page.submit('a question so a chat exists');
+    await waitFor('the reply', () => finished(thread), 30_000);
+
+    const { chats } = await (await fetch(`${page.base}/api/chats`)).json();
+    const chatId = chats[0].id;
+
+    // Point the chat at something this build does not ship, the way a restored
+    // backup or an edited models.json would, and strip the reply's own model so
+    // the fallback is the only path left.
+    const patched = await fetch(`${page.base}/api/chats/${chatId}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ modelId: 'retired-7b' }),
+    });
+    assert.equal(patched.status, 200, 'a plausible id for a model we no longer ship is still a legal chat');
+
+    const file = path.join(page.dir, `${chatId}.json`);
+    const raw = JSON.parse(await fs.readFile(file, 'utf8'));
+    for (const m of raw.messages) delete m.modelId;
+    await fs.writeFile(file, JSON.stringify(raw, null, 2));
+
+    // Highlight a real model in the rail. If the label borrows from there, it
+    // will say this one.
+    const cards = page.byId('modelList').querySelectorAll('.model');
+    const railCard = cards[cards.length - 1];
+    const railName = railCard.querySelector('.model-name').textContent;
+    dispatch(railCard, makeEvent('click'));
+
+    const before = thread.querySelector('.msg-assistant');
+    dispatch(page.byId('chatList').querySelector('.chat-row'), makeEvent('click'));
+    await waitFor('the thread to be rebuilt from disk', () => {
+      const now = thread.querySelector('.msg-assistant');
+      return now && now !== before ? now : false;
+    });
+
+    const role = thread.querySelector('.msg-assistant').querySelector('.msg-role');
+    assert.ok(
+      role.textContent.startsWith('retired-7b'),
+      `the chat's own model is the only honest guess; got "${role.textContent}"`,
+    );
+    assert.ok(
+      !role.textContent.includes(railName),
+      `the rail's selection (${railName}) must never become a reply's label`,
+    );
+    assert.equal(role.className.includes('is-inferred'), true, 'and it is still a guess, so it stays marked');
+  } finally {
+    await page.close();
+  }
+});
+
+test('a chat modelId that is not a plausible model tag is refused', async () => {
+  const page = await mount({ script: SCRIPTED, delayMs: 4, chunkSize: 8 });
+  try {
+    page.submit('a question so a chat exists');
+    await waitFor('the reply', () => finished(page.byId('thread')), 30_000);
+    const { chats } = await (await fetch(`${page.base}/api/chats`)).json();
+
+    for (const bad of ['x'.repeat(65), 'has spaces', 'rtl‮override', '<script>', '']) {
+      const res = await fetch(`${page.base}/api/chats/${chats[0].id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ modelId: bad }),
+      });
+      assert.equal(res.status, 400, `modelId ${JSON.stringify(bad.slice(0, 20))} must be refused`);
+    }
+
+    const { chat } = await (await fetch(`${page.base}/api/chats/${chats[0].id}`)).json();
+    assert.match(chat.modelId, /^[A-Za-z0-9._:-]{1,64}$/, 'and none of them can have landed');
   } finally {
     await page.close();
   }

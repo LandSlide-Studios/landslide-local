@@ -562,7 +562,7 @@ test('Q3: the markdown export attributes each reply to the model that wrote it',
   assert.ok(!md.includes('predate'), 'nothing was inferred here, so nothing should be caveated');
 });
 
-test('Q3: an export containing unstamped replies says so once, not per heading', async () => {
+test('Q3: an export marks which replies are assumed, and explains once', async () => {
   const { toMarkdown } = await import('../src/core/chat-export.js');
   const md = toMarkdown({
     title: 'legacy',
@@ -570,8 +570,16 @@ test('Q3: an export containing unstamped replies says so once, not per heading',
     messages: [
       { role: 'user', content: 'q' },
       { role: 'assistant', content: 'written before the field existed' },
+      { role: 'user', content: 'q2' },
+      { role: 'assistant', content: 'written after', modelId: 'deckard-4b' },
     ],
   });
-  assert.equal(md.split('predate').length - 1, 1, 'the caveat belongs in the metadata line, once');
-  assert.ok(md.includes('## deckard-4b'), "the chat's model is still the best guess available");
+
+  const headings = md.split('\n').filter((l) => l.startsWith('## '));
+  assert.deepEqual(
+    headings,
+    ['## You', '## deckard-4b (assumed)', '## You', '## deckard-4b'],
+    'the two replies carry the same name for different reasons, and the file has to say which is which',
+  );
+  assert.equal(md.split('predate').length - 1, 1, 'the explanation belongs in the metadata line, once');
 });

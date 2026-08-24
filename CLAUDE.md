@@ -44,8 +44,8 @@ them is hypothetical.
   timing, token accounting and abort. Adapters (`ollama`, `llamacpp`, `fake`) carry
   **protocol only**. If you find yourself parsing `<think>` in an adapter, it belongs
   in the facade.
-- `ChatStore` (`src/core/chat-store.js`) — `json` and `memory` adapters share one
-  contract suite in `test/chat-store.test.js`. Add a behaviour there, not to one adapter.
+- `ChatStore` (`src/core/chat-store.js`) — `json`, `memory` and `encrypted` adapters share
+  one contract suite in `test/chat-store.test.js`. Add a behaviour there, not to one adapter.
 - `ThinkStream` (`src/core/think-stream.js`) — pure. Holds back any suffix that could
   still become a tag, so tags split across chunks work. Do not "simplify" the holdback.
 - `src/api.js` is deliberately thin: it builds the dependencies, concatenates the
@@ -84,7 +84,7 @@ them is hypothetical.
 ## Before calling anything done
 
 ```
-npm run test:core                          # the five core suites — must be 79/79
+npm run test:core                          # the five core suites — must be 96/96
 node scripts/acceptance-lock.mjs --verify  # the target has not moved
 node scripts/preflight.mjs                 # must be 0 FAIL
 node scripts/verify-live.mjs               # must reach a real model
