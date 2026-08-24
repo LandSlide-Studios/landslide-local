@@ -1,151 +1,178 @@
 # Landslide Local
 
-An offline chat client for five uncensored Qwen 3.5 models, tuned for an RTX 5060 (8 GB).
+A private, offline chat client for uncensored local language models.
 
-No accounts, no telemetry, no internet. Everything — the app, the models, the chat
-history — sits on your N: drive.
+No accounts, no telemetry, no network. The app, the models and every conversation
+stay on your machine. It talks to [Ollama](https://ollama.com) (or llama.cpp) over
+loopback and to nothing else — a check in the test suite greps every shipped file
+for an external host and fails the build if one appears.
+
+**Zero dependencies.** Node's standard library only. No `npm install`, no lockfile,
+no supply chain. The markdown renderer, the archive format and the MCP protocol
+implementation are all written here.
 
 ---
 
-## First run
+## What it does
 
-**1. Ollama must be 0.32 or newer.** Anything from the 0.x series before that predates
-Qwen 3.5 and cannot load these models. This machine is on **0.32.15**, so there is
-nothing to do here; on a fresh machine:
+- **Five models, one sidebar.** Switch mid-conversation. Each card says whether it
+  actually fits your VRAM *before* you pick it.
+- **Reasoning shown separately.** Models that think stream their reasoning into a
+  panel that opens while they work and folds away when the answer starts.
+- **Markdown that renders.** Headings, nested lists, tables, code — with a
+  per-model profile, because a prose model and a table-heavy model write
+  differently.
+- **Context budgeting.** Long chats are trimmed oldest-first *with the count
+  reported*, rather than silently forgotten by the runtime.
+- **A system prompt that reaches the model**, saved per chat, with a prompt library.
+- **Optional AES-256-GCM encryption at rest** and an optional loopback auth token.
+- **An MCP server**, so an MCP client can call your local models as tools.
+- Live timer, tokens/sec, time-to-first-token, regenerate, markdown export,
+  search, backup and restore, start-at-login.
 
+---
+
+## Requirements
+
+| | |
+|---|---|
+| **Node** | 22 or newer |
+| **Ollama** | 0.32 or newer — earlier versions predate the Qwen 3.5 architecture |
+| **GPU** | Any. The sizing below assumes 8 GB; the smaller models want far less |
+| **Disk** | ~21 GiB for all five models, or ~1.2 GiB for just the smallest |
+
+Windows, macOS and Linux — CI runs the suite on all three. Start-at-login is
+Windows-only today.
+
+---
+
+## Install
+
+```bash
+git clone https://github.com/LandSlide-Studios/landslide-local.git
+cd landslide-local
+node scripts/fetch-models.mjs      # downloads and registers the models
+npm start                          # http://127.0.0.1:4390
 ```
-winget upgrade --id Ollama.Ollama
-```
 
-`npm run preflight` prints the version it actually found and warns if it is too old.
+No build step and nothing to install — `npm start` is `node src/server.js`.
 
-**2. Set the Ollama environment once.** These matter a great deal on 8 GB of VRAM —
-flash attention plus an 8-bit KV cache roughly halves context memory, which is what
-buys the 9B models room to run entirely on the GPU.
+To try the interface before committing 21 GiB of downloads, `npm run demo` runs the
+whole app against a scripted fake model.
 
-```
-setx OLLAMA_CONTEXT_LENGTH 16384
+**Ollama settings that matter on 8 GB.** Flash attention and an 8-bit KV cache
+roughly halve context memory, which is what lets a 9B run entirely on the GPU:
+
+```bash
 setx OLLAMA_FLASH_ATTENTION 1
 setx OLLAMA_KV_CACHE_TYPE q8_0
+setx OLLAMA_CONTEXT_LENGTH 16384
 ```
 
-**3. Download the models** (~21.2 GiB / 22.8 GB, one time, resumable).
-
-```
-node scripts/fetch-models.mjs
-```
-
-Or just one to start: `node scripts/fetch-models.mjs deckard-4b`
-
-**4. Start it.** Double-click `start.cmd`, or:
-
-```
-npm start
-```
-
-Then open <http://127.0.0.1:4390>.
-
-To try the interface before downloading anything, double-click `start-demo.cmd` — it
-runs the whole app against a scripted fake model.
+Machine-specific settings — where models live, your GPU, a token — belong in
+`config.local.json`, which git ignores. Copy `config.example.json` to start.
 
 ---
 
 ## The models
 
-All five are uncensored (Heretic-processed). Sizes are the real GGUF download.
+These are [DavidAU](https://huggingface.co/DavidAU)'s Qwen 3.5 variants, processed
+with [Heretic](https://github.com/p-e-w/heretic) to remove refusal behaviour. They
+are ordinary GGUF files — the app has no opinion about which models you run, and
+`models.json` is a plain data file you can edit.
 
-Speeds below are **measured on this machine** (RTX 5060 8 GB, warm model), not estimated.
+**Speeds are measured on an RTX 5060 (8 GB), warm model.** Not estimated.
 
-| Model | Size | Fit | Measured | What it is for |
+| Model | Size | Fit on 8 GB | Measured | For |
 |---|---|---|---|---|
-| **Heretic Instruct** 9B | 4.97 GiB | fits | **73 tok/s**, 0.3s to first token | No reasoning block — answers immediately. The daily driver |
-| **Cold Fusion GAIN** 9B | 5.23 GiB | fits | **66 tok/s** | Best all-rounder; sharpest at tables, code and structure |
-| **Deckard** 4B | 2.52 GiB | fits | **107 tok/s** | Fast and characterful — fiction, voice, roleplay |
-| **Auto-Variable** 2B | 1.19 GiB | fits | **125 tok/s** | Near-instant, for quick rewrites and drafting |
-| **GLM-Flash Heretic** 21B | 7.32 GiB | spills | **8.9 tok/s** | Smartest here — and it took 3m15s to answer one short question |
+| **Heretic Instruct** 9B | 4.97 GiB | fits | **73 tok/s**, 0.3 s to first token | No reasoning block. The daily driver |
+| **Cold Fusion GAIN** 9B | 5.23 GiB | fits | **66 tok/s** | Best all-rounder; tables, code, structure |
+| **Deckard** 4B | 2.52 GiB | fits | **107 tok/s** | Fiction, voice, roleplay |
+| **Auto-Variable** 2B | 1.19 GiB | fits | **125 tok/s** | Quick rewrites and drafting |
+| **GLM-Flash Heretic** 21B | 7.32 GiB | **spills** | **8.9 tok/s** | Smartest here — and it took 3m 15s to answer one short question |
 
 The 21B is the honest disappointment: it does not fit in 8 GB, so part of it runs on
-DDR4-2133 system RAM. One sentence cost 195 seconds. Keep it for something you are
-willing to walk away from.
+system RAM. Keep it for something you can walk away from.
 
-A reasoning model's wall-clock is dominated by how long it thinks, not by tok/s — the
-4B spent 2,869 tokens reasoning about a single sentence. The Instruct model skips that
-entirely, which is why it feels several times faster than its 73 tok/s suggests.
+A reasoning model's wall-clock is dominated by how long it *thinks*, not by tok/s.
+The 4B once spent 2,869 reasoning tokens on a single sentence.
 
-Sizes are GiB, the same unit VRAM is measured in (Hugging Face shows decimal GB, which
-reads about 7% larger).
-
----
-
-## Starting the models
-
-You do not need to start Ollama yourself. If it is not running, the sidebar says so
-and gives you a **Start Ollama** button - one click, and the app waits until the
-server actually answers before clearing the warning.
-
-This is more reliable than launching Ollama from the Start Menu, because the app
-passes the environment from `config.json` (`runtime.ollamaEnv`) when it starts it.
-That is what guarantees the model store on N: is found. A Start Menu launch inherits
-whatever environment Explorer happens to be holding, which is how `ollama list` came
-back empty after the store moved.
-
-Loading a 9B off the SSD costs about 20 seconds, and without preloading you pay that
-on your first message. Two things stop you paying it:
-
-- **Picking a model in the sidebar starts loading it.** The click is the moment you are
-  least busy — you are about to type — so that is when the load happens. It is silent:
-  one load at a time, nothing at all for a model already resident, and no error if the
-  runtime refuses, because you did not ask for it. Click through several cards quickly
-  and it loads the one you settle on, not the ones you passed.
-- **Preload** on a card does the same thing on demand, with a button that reports what
-  happened. A model already resident shows **in VRAM** instead.
-
-Once loaded, a model stays resident for 30 minutes after the last request that touched
-it. Both the preload and every chat message ask for the same 30 minutes, and both send
-the same `num_ctx` and `num_batch` — otherwise Ollama resets the timer to its own
-5-minute default and reloads the model at a different context or batch size on the first
-message, which is exactly the reload the preload was meant to avoid. Both values come
-from one place, `catalog.optionsFor()`, so they cannot drift apart. This applies to
-Ollama; llama-server has no equivalent and keeps its model loaded for as long as it runs.
-
-`num_batch` is how many prompt tokens are evaluated per pass — a prompt-processing
-knob, not a generation one. It is set per model, and the values are **measured on this
-machine**, prompt-eval throughput on a 2,781-token prompt against a warm model:
-
-| num_batch | 2B | 4B | 9B Instruct | 9B GAIN | 21B |
-|---|---|---|---|---|---|
-| 256 | 5,661 | 3,222 | 2,264 | 2,065 | 434 |
-| **512** | 6,006 | **3,425** | **2,423** | **2,428** | 536 |
-| **1024** | **6,382** | 3,391 | 2,418 | 2,311 | **630** |
-| 2048 | 6,108 | 3,375 | 2,400 | 2,273 | 632 |
-
-Prompt-eval tok/s. Bold is the value each model ships with.
-
-The three models that fit on the card peak at 512 and get *slower* above it: the compute
-buffer a bigger batch needs competes with the weights and the KV cache for the same
-6.65 GB. The 21B goes the other way and wants 1024 — it runs layers on system RAM
-whatever you do, so a bigger batch amortises that pass instead of aggravating it, and
-256 (the value that looks obvious for a model 1.5 GB over the card) is 31% slower than
-512 and 45% slower than 1024. Generation speed is unaffected by any of this.
+`node scripts/check-uncensored.mjs` measures refusal behaviour rather than trusting
+a flag in the catalog — a claim that checks itself proves nothing. All five score
+0/4 refused.
 
 ---
 
-## Using it
+## Architecture
 
-| | |
+Deep modules behind small interfaces, with real seams: every abstraction has at
+least two live implementations, so none of them is speculative.
+
+| Module | Interface | Adapters |
+|---|---|---|
+| `InferenceRuntime` | `listModels · chat · health` | Ollama, llama.cpp, fake |
+| `ChatStore` | `list · get · create · append · search` | JSON file, encrypted, in-memory |
+| `ThinkStream` | `feed(chunk) → events` | pure |
+| `ContextBudget` | `planContext(…)` | pure |
+| `RuntimeSupervisor` | `status · start · warm · unload` | Ollama |
+
+The runtime facade owns everything a caller cares about — reasoning separation,
+timing, token accounting, abort. Adapters carry protocol only: NDJSON for Ollama,
+SSE for llama.cpp. Switching backends is one line of config.
+
+Front end and back end share one event vocabulary (`public/shared/events.js`), so a
+renamed event is a broken import rather than a silent mismatch.
+
+No file exceeds 400 lines.
+
+---
+
+## Tests
+
+```bash
+npm test              # 228 tests
+npm run preflight     # environment, offline check, model availability
+npm run verify-live   # proves the real path against an actual model
+```
+
+Three things about the suite that are deliberate and slightly unusual:
+
+**Acceptance tests are written before the code, and checksummed.** Each feature has
+a suite under `test/acceptance/` authored ahead of its implementation and locked
+with SHA-256. `npm run lock` fails if one changed. An implementer who can edit its
+own acceptance test can always pass it, and every review after that is theatre.
+
+**The UI test has no browser engine.** `test/ui.test.js` parses the real
+`index.html` into a DOM shim, imports the real front end against it, and drives a
+full send → stream → render cycle with no Playwright and no jsdom. It is verified
+to *fail* when the app breaks: forcing the status bar visible fails 4 of its 8 tests.
+
+**`verify-live` checks the reasoning path specifically.** The worst bug this project
+had was a dropped `message.thinking` field — reasoning arrived from the model, never
+reached the page, and shipped past a green suite *and* a green preflight, because
+the fake adapter emits inline `<think>` tags and Ollama does not. A live check that
+only looked for an answer would have waved it through too.
+
+---
+
+## Calling your local models from an MCP client
+
+`src/mcp/server.js` speaks JSON-RPC 2.0 over stdio, with no SDK.
+
+```bash
+claude mcp add landslide-local -- node /path/to/landslide-local/src/mcp/server.js
+```
+
+| Tool | Does |
 |---|---|
-| `Enter` | send |
-| `Shift`+`Enter` | new line |
-| `Ctrl`+`K` | search chats |
-| `Ctrl`+`N` | new chat |
-| `Esc` | stop generating |
+| `ask_local_model` | Runs a prompt against one of the catalogued models |
+| `list_local_models` | Lists them with sizes and fit verdicts |
+| `search_chats` | Searches your saved conversations |
 
-Pick a model in the left sidebar. Switching models mid-conversation is fine — the
-next turn uses the new one. The reasoning panel opens itself while the model thinks
-and folds away once it starts answering; click it any time to reread.
-
-The status bar shows a live timer while generating, then each reply records how long
-it took, time to first token, token count and tokens per second.
+Three tools, no filesystem, no shell. The `model` argument is looked up in the
+catalog and the caller's string is never passed through — without that guard a
+client could name any model in your Ollama registry, including one far too large
+for your card.
 
 ---
 
@@ -153,348 +180,33 @@ it took, time to first token, token count and tokens per second.
 
 | | |
 |---|---|
-| Chats | `N:\landslide-local\chats` — one JSON file per conversation |
-| Models | `N:\models` |
-| Log | `logs\app.log` inside this folder |
-| Backups | `backups\` inside this folder, when you make one |
+| Chats | `./chats` — one JSON file per conversation |
+| Models | wherever `modelsDir` points; Ollama also keeps its own copy |
+| Logs | `./logs/app.log`, rotated at 2 MB |
 
-Chat files are plain JSON. Delete one and it is gone. Nothing is written anywhere else,
-and nothing leaves the machine.
-
-Two options exist for when plain JSON on a loopback port is not private enough for what
-you use this for. Both are off until you turn them on, and neither changes anything
-about the app while they are off.
+Chat files are plain JSON. Back them up by copying the folder, or `npm run backup`.
+With encryption enabled they are AES-256-GCM, and **a forgotten passphrase means
+they are gone** — there is no recovery, by design.
 
 ---
 
-## Encrypting the chats
+## Limitations
 
-With this on, every chat file is AES-256-GCM ciphertext under a key derived from your
-passphrase with scrypt. The title, the message bodies and the model's reasoning are all
-inside it. The only thing legible from outside is the file name, which is a random id.
+Stated plainly, because a README that only lists strengths is an advertisement.
 
-**If you forget the passphrase, every chat is gone.** Not "gone until it is reset" —
-gone. This app never writes the passphrase down, deliberately: a key kept beside the
-data it protects is not protecting anything. There is no recovery mode, no hint, no
-second copy and nobody to ask. Write it down somewhere real before you turn this on.
-
-### Turning it on
-
-**1. Back up first.** `npm run backup`, and put the archive somewhere else.
-
-**2. Set the passphrase.**
-
-```
-setx LANDSLIDE_PASSPHRASE "the passphrase you just wrote down"
-```
-
-It comes from the environment and never from `config.json`. Config gets printed, logged
-and pasted into bug reports; a passphrase that lives in it will eventually end up
-somewhere you did not intend.
-
-**3. Move the chats you already have.**
-
-```
-npm run encrypt-chats            says what it would do, changes nothing
-npm run encrypt-chats -- --yes   does it
-```
-
-Each chat is encrypted, written, read back off the disk and compared against the
-original — and only then is the plain file removed. Nothing is deleted that has not
-been verified first. If it is interrupted half way through, run it again and it picks
-up where it stopped; a file it cannot parse, or one whose encrypted copy already exists
-with different content, is left exactly where it is and reported rather than guessed at.
-
-**4. Make a missing passphrase an error rather than a downgrade.**
-
-```json
-{ "security": { "encryptChats": true } }
-```
-
-That flag does not switch encryption on — the passphrase does. What it does is make the
-app refuse to start when the passphrase is missing, instead of opening the folder as
-plain files and quietly writing your next conversation into it in the clear.
-
-If you use the MCP server as well, it reads the same folder and needs
-`LANDSLIDE_PASSPHRASE` in its environment too. Without it, it reports an empty history
-rather than an error.
-
-### What it does not cover
-
-- **`logs\app.log`.** It records requests, timings and errors — not chat content — and
-  it stays plain text.
-- **Backups made before you switched.** Those archives are still plaintext.
-- **Plaintext that was already deleted.** `encrypt-chats` overwrites each old file
-  before unlinking it, which is worth doing and not worth believing in: an SSD may well
-  have written the new bytes to a different block and left the originals sitting in
-  flash, readable by anything that can address it directly.
-- **The running app.** While it is open, the passphrase and the decrypted chats are in
-  memory, and the browser has the decrypted text on screen.
-- **Going back.** There is no built-in migration from encrypted to plain. Copy anything
-  you want out of the app before you decide you are done with it.
+- **No hosted demo is possible.** It needs a local model server; that is the point.
+- **Vision is unavailable.** Qwen 3.5 is multimodal, but the quants bundled here
+  ship without the projector file.
+- **Start-at-login is Windows-only.**
+- **Single user.** Writes are serialised per chat; there is no multi-user story.
+- **Plain JavaScript, no types.**
+- The context estimate is a heuristic that deliberately over-counts, not a real
+  tokenizer.
+- The bundled models have had their refusal behaviour removed. They will attempt
+  whatever they are asked. What you do with that is on you.
 
 ---
 
-## Locking the API to a token
+## Licence
 
-The server only ever answers on `127.0.0.1`, so anything reaching it is already running
-on this machine. A token draws a line inside that: the browser tab you opened gets in,
-and other software under your account does not — a script, an extension's helper,
-something scanning local ports for an open API.
-
-```json
-{ "security": { "token": "paste-a-long-random-string-here" } }
-```
-
-Or keep it out of the file entirely:
-
-```
-setx LANDSLIDE_TOKEN "paste-a-long-random-string-here"
-```
-
-Generate one with:
-
-```
-node -e "console.log(require('node:crypto').randomBytes(24).toString('base64url'))"
-```
-
-The `config.json` in this folder ships with `"token": ""`, which means off. It should
-never be committed with a real one in it.
-
-With a token set, every `/api/` request needs an `Authorization: Bearer <token>` header.
-The page itself still loads without one — it has to, or there would be nowhere to type
-the token — so the first API call comes back 401, the app asks you for the token, and
-remembers it in that browser from then on. If the answer is wrong it is discarded rather
-than left to fail every request afterwards. Comparison is constant-time, over digests,
-so a wrong token gives nothing away about the right one.
-
-**What it is not.** It is not a login, and it is not protection from somebody sitting at
-this keyboard — they can read `config.json`, or the browser's storage, in about ten
-seconds. It raises the bar for other software on the machine, and that is the entire
-claim being made for it. Against a person with physical access, the encryption above is
-what helps, and only while the app is shut.
-
----
-
-## Reliability
-
-Three things that matter once you actually live in this app: it keeps a log, it can
-hand you your chats back, and it can start itself at login.
-
-### The log
-
-Every run appends to `logs\app.log` — startup, shutdown, failed requests, and anything
-that would otherwise have vanished with the console window. The path comes from
-`config.json`:
-
-```json
-{ "storage": { "logFile": "./logs/app.log" } }
-```
-
-It is relative on purpose, so it follows the folder if you move it to another drive.
-Set it to `""` to turn logging off entirely.
-
-The file cannot grow without bound. At 2 MB it rotates: `app.log` becomes `app.log.1`,
-`.1` becomes `.2`, and the fourth one is dropped. Three archives plus the active file
-is the whole footprint.
-
-Logging never takes the app down with it. If the path is unwritable — the drive filled
-up, or something is sitting where the file should be — the logger switches itself off
-and the app carries on. A log line is not worth losing a conversation over.
-
-The same reasoning is why the server installs `unhandledRejection` and
-`uncaughtException` handlers. Node's default is to exit on a stray rejection; here it
-gets written to the log and the session keeps going.
-
-### Backing up your chats
-
-```
-npm run backup                       creates backups\chats-<timestamp>.lsb
-npm run backup -- D:/keep/chats.lsb  writes exactly there
-```
-
-One file holds the whole chats folder, gzipped, with a SHA-256 of every file inside it.
-Copy it to a second drive and that is a real backup.
-
-```
-npm run restore -- backups\chats-2026-08-24T10-31-02.lsb
-npm run restore -- <archive> --into D:/somewhere    restore beside the live folder first
-npm run restore -- <archive> --force                write over a folder that is not empty
-```
-
-Restore checks every checksum in the archive *before* it writes anything. A truncated
-or edited archive is refused with the destination still empty — a half-restored chat
-folder is worse than no restore, because it looks like it worked. It also refuses a
-destination that already holds files unless you pass `--force`, so an old backup cannot
-land on top of a live folder by accident. Restoring into an empty folder to look first
-costs nothing.
-
-The archive format is a header plus the file bytes; there is no dependency involved and
-nothing to install to read it back.
-
-### Starting at login
-
-```
-npm run autostart              is it on?
-npm run autostart install
-npm run autostart uninstall
-```
-
-Install writes one file — `landslide-local.cmd` — into your own Startup folder
-(`%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup`). No registry key, no
-scheduled task, no administrator prompt. Deleting that file by hand is a complete
-uninstall, and `uninstall` removes it only if it is the file this app wrote, so a
-shortcut you put there yourself is never touched.
-
----
-
-## Calling these models from Claude (MCP)
-
-`src/mcp/server.js` is an MCP server, so Claude — or any other MCP client — can hand
-work to the models on this machine. That is the point of it: a prompt you would rather
-not send to a hosted model, or one you want answered without a filter, gets delegated
-here instead, and the whole exchange stays on the N: drive.
-
-It speaks MCP's stdio transport directly (JSON-RPC 2.0, one message per line). There is
-no SDK and nothing to install — same zero-dependency rule as the rest of the app.
-
-**Register it.** In Claude Code:
-
-```
-claude mcp add landslide-local -- node N:\landslide-local\src\mcp\server.js
-```
-
-Or paste this into the client's MCP config file (Claude Desktop:
-`%APPDATA%\Claude\claude_desktop_config.json`) and restart the client:
-
-```json
-{
-  "mcpServers": {
-    "landslide-local": {
-      "command": "node",
-      "args": ["N:\\landslide-local\\src\\mcp\\server.js"]
-    }
-  }
-}
-```
-
-The doubled backslashes are JSON escaping, not a typo — `N:/landslide-local/src/mcp/server.js`
-works just as well and is easier to read. Ollama has to be running for
-`ask_local_model` to answer; the other two tools work regardless.
-
-**The three tools**, which are the entire surface:
-
-| Tool | Does |
-|---|---|
-| `ask_local_model` | Sends one prompt to one catalogued model and returns the answer. Optional `model` (defaults to `heretic-instruct-9b`) and `system`. Reasoning is stripped; you get the answer |
-| `list_local_models` | The five ids, their size, whether Ollama has them installed, and whether each fits in 8 GB |
-| `search_chats` | Searches the chats in `N:\landslide-local\chats` by title and message text |
-
-There is no filesystem tool, no shell tool, and no way to pass a raw model tag. A model
-with its refusal behaviour removed, reachable as a tool, should be able to write text
-and nothing else. `ask_local_model` looks its `model` argument up in the catalog rather
-than forwarding it, so a request naming anything else in the local registry — this
-machine also has `dolphin-llama3:70b` registered, 37.22 GiB against 8 GB of VRAM — is
-refused rather than loaded.
-
-**If you are editing it:** stdout is the transport. A single line of ordinary output
-written there corrupts the stream for the rest of the session, which is why every
-diagnostic in that file goes to stderr, and why the acceptance suite greps the source
-for the function that writes to stdout.
-
-To check it by hand without a client at all, pipe three messages into it:
-
-```
-(echo {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{}}} ^
- & echo {"jsonrpc":"2.0","id":2,"method":"tools/list"} ^
- & echo {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_local_models","arguments":{}}}) ^
- | node src\mcp\server.js
-```
-
-Three JSON lines come back on stdout, the startup line and per-call timings on stderr.
-
----
-
-## Checking it still works
-
-```
-npm run test:core # the five core suites: 79 tests, none of which touches a model
-npm run preflight # environment, fonts, models, and the offline check
-```
-
-`npm test` runs everything in the folder instead, acceptance suites included — and
-those describe work that is still queued, so it reports failures on purpose. Use it
-to see what is left, not to decide whether the app is healthy.
-
-Neither of the two commands above touches a model. To prove the whole path really works - Ollama up,
-store readable, a real model generating, and the reply saved - double-click
-`verify.cmd` or run:
-
-```
-node scripts/verify-live.mjs
-```
-
-That is the one to run after a reboot.
-
-Preflight's `offline` check greps every served and runtime file for an external host.
-If it passes, the app genuinely has no network dependency.
-
----
-
-## Switching to llama.cpp
-
-Ollama's Qwen 3.5 support has known rough edges and llama-server is faster on the same
-GGUF. Start `llama-server` on port 8080, then change one line in `config.json`:
-
-```json
-{ "runtime": { "adapter": "llamacpp" } }
-```
-
-Chatting works immediately: both runtimes sit behind the same interface, and the
-sidebar names whichever one is configured and reports its real health.
-
-### What you gain
-
-- **Speed on the same file.** Same GGUF, same quant, more tokens per second. llama.cpp
-  is where the kernels land first; Ollama ships behind it.
-- **Multi-token prediction.** llama.cpp can produce more than one token per forward
-  pass — natively for a GGUF that carries an MTP head, and otherwise through
-  `--model-draft`, which speculates with a small draft model and has the large model
-  verify a run of tokens at once. Ollama's HTTP API exposes neither, so this is only
-  reachable from here.
-
-  Read that as a door the switch opens rather than a speed-up it hands you. It needs
-  either a build that actually ships the MTP head or a draft model small enough to be
-  worth the VRAM beside a 9B, and **which of the five bundled quants qualify has not
-  been checked** — `llama-server` says so at load, so look before planning around it.
-- **Everything llama.cpp takes on the command line.** Sampler and runtime flags Ollama
-  does not surface are just arguments to `llama-server`.
-
-### What you lose
-
-All of it is Ollama-specific, and the app no longer pretends otherwise. `/api/runtime`
-reports `canWarm: false` and `canStart: false` under llamacpp, so the affordances do not
-render; and if something calls them anyway, `POST /api/runtime/start` and
-`POST /api/runtime/warm` both answer **409** naming the configured adapter instead of
-quietly acting on Ollama. That refusal is the guarantee — a hidden button is only a
-courtesy.
-
-- **Start Ollama** — the app can only launch Ollama. Start `llama-server` yourself.
-- **Preload, including the automatic one when you pick a model** — llama-server holds
-  one model for its whole lifetime, so there is nothing to preload. The automatic
-  preload checks `canWarm` first and simply does nothing here.
-- **in VRAM** — the residency list is read from Ollama's `/api/ps`. There is no
-  equivalent, so the list is empty and no card claims residency.
-- **Model choice** — llama-server serves the single GGUF it was started with, so
-  picking another card in the sidebar does not switch models. Restart it with a
-  different `-m` instead.
-- **Per-model `num_ctx` and `num_batch`** — on llama-server these are startup flags
-  (`-c`, and `-b` / `-ub`), not request fields, so the catalog's per-model values do not
-  reach it. Set them on the command line to match the model you started it with.
-  `temperature`, `top_p`, `top_k`, `repeat_penalty` and `max_tokens` do carry over.
-- `fetch-models.mjs --cleanup-raw` — it deletes a raw GGUF only once Ollama's registry
-  holds a copy. With llama.cpp the raw file *is* the model. Never run it.
-
-So: one line to switch what answers, real speed and a decoding path Ollama cannot give
-you — against six Ollama-only conveniences, each of which now refuses honestly rather
-than lying.
+MIT — see [LICENSE](LICENSE).
