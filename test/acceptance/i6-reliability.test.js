@@ -177,6 +177,13 @@ test('I6-C2: install then uninstall leaves the machine as it was', async () => {
   const mod = await import('../../src/core/autostart.js');
   const before = await mod.status();
 
+  // The module reports whether this platform has a mechanism at all. Asserting
+  // an install succeeds on a platform that has none tests the test, not the code.
+  if (!before.supported) {
+    assert.equal(before.installed, false, 'an unsupported platform must report not-installed');
+    return;
+  }
+
   if (before.installed) {
     assert.ok(true, 'already installed by the user; not touching it');
     return;
@@ -195,7 +202,8 @@ test('I6-C2: install then uninstall leaves the machine as it was', async () => {
 
 test('I6-C3: uninstalling when nothing is installed is not an error', async () => {
   const mod = await import('../../src/core/autostart.js');
-  if ((await mod.status()).installed) return;
+  const st = await mod.status();
+  if (st.installed) return;
   const r = await mod.uninstall();
   assert.equal(r.ok, true, 'a no-op uninstall must succeed quietly');
 });
@@ -213,7 +221,8 @@ test('I6-D1: an unhandled rejection is logged, not fatal', async () => {
       else if (e.name.endsWith('.js')) files.push(full);
     }
   };
-  await walk(new URL('../../src/', import.meta.url).pathname.slice(1));
+  const { fileURLToPath } = await import('node:url');
+  await walk(fileURLToPath(new URL('../../src/', import.meta.url)));
   let guarded = false;
   for (const f of files) {
     const text = await fs.readFile(f, 'utf8');
