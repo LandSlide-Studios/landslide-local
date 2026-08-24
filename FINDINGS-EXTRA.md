@@ -111,3 +111,63 @@ answers 409. Before F9-C those buttons were live in the demo and loaded models
 into a real Ollama. Flagged only because the README's demo paragraph does not
 mention preload either way — nothing to correct, but the demo does look sparser
 than it did.
+
+## E11. `I2-D2` can never read a pass count, for the same reason as `I0b-F9g`
+
+`test/acceptance/i2-architecture.test.js:183` shells out to
+`node --test test/chat-store.test.js ...` and asserts on `/^# fail (\d+)$/m`.
+Run standalone that command prints `# tests 79 / # fail 0`; run as a child of
+the test runner it inherits `NODE_TEST_CONTEXT`, switches to the internal
+serializer, and `execFileSync` returns nothing the regex can match — so the
+assertion fails with `undefined !== '0'` no matter how green those suites are.
+Confirmed by hand: same command, same cwd, outside a runner, 13,127 bytes of TAP
+and `# fail 0`. It is an I2 file so it is failing for an unbuilt item anyway,
+but it would keep failing after I2 is built. Same fix as E8 — pass
+`env: { ...process.env, NODE_TEST_CONTEXT: undefined }`. Acceptance files are
+not the builder's to edit; this is for the planner.
+
+## E12. A blank line inside a list splits it, and that is deliberate
+
+`render.js` treats a blank line as a hard boundary: everything before it can
+never be re-parsed, which is what keeps a long stream from re-rendering itself
+on every token. The cost is that a "loose" list —
+
+    - first
+
+    - second
+
+— arrives as two `<ul>`s rather than one. Numbering survives (an `<ol>` carries
+`start`, so a split step list still reads 4, 5, 6), and the margins make the
+seam hard to see, but the DOM is two lists. Making it one would mean a boundary
+that depends on text that has not arrived yet, and that is exactly the class of
+guess that breaks the stream/reload equivalence. Flagged so the next person does
+not "fix" it without knowing what it buys.
+
+## E13. Indented code blocks are not supported, on purpose
+
+Four-space indentation means a nested list item here, not a code block. The
+reasoning models indent sub-bullets by four spaces constantly (the trace in the
+I8 spec does it), so honouring the CommonMark indented-code rule would turn most
+of a reasoning trace into code boxes. Fenced code is unaffected. Worth knowing
+if a model ever writes indented code and it comes out as prose.
+
+## E14. The reasoning panel had no rules for `pre` or `code`
+
+Pre-existing, found while looking at a real trace: `.msg-text pre` was styled
+and `.think-text pre` never was, so a code fence inside reasoning — which the
+models write constantly — kept the UA default `white-space: pre` and pushed a
+horizontal scrollbar across the whole trace. Measured before the fix on a real
+Deckard run: `scrollWidth` 3443 against `clientWidth` 787. Fixed in this round
+because it is the same panel I8 renders into; noted here because it was not an
+I8 defect.
+
+## E15. `test/render.test.js` is new and is not part of any gate
+
+Added this round, outside `test/acceptance/`. It pins the one invariant the I8
+suite only samples: streamed and reloaded DOM must match at every chunk size.
+Both bugs it names were real and were found by its fuzz case, not by hand — a
+paragraph that had gained a trailing newline swallowed it on the fast path, and
+a line sitting under a table separator turned into a row on a single `|`
+without the renderer noticing. It runs in 0.2s and is picked up by bare
+`npm test` auto-discovery; it is not in `npm run test:core`, so the planner may
+want it there.

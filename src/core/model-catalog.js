@@ -47,6 +47,30 @@ const OPTION_LIMITS = Object.freeze({
   num_predict: { min: 1, max: 32768, integer: true, unboundedMeansMax: true },
 });
 
+/**
+ * How each model writes, which is not the same question as what the renderer
+ * can draw. `public/render.js` takes one of these as `renderText`'s third
+ * argument; the knobs are the two places a wrong guess is visible.
+ *
+ * - `structured` — the instruct and GAIN tunes. They answer in headings and
+ *   pipe tables, they drop into a bullet list with no blank line above it, and
+ *   they nest with the two spaces markdown actually asks for.
+ * - `reasoning` — the thinking tunes. A trace is nested asterisk bullets under
+ *   a numbered step, indented a full four spaces (that is verbatim what Deckard
+ *   emitted), so two spaces is a wrapped line rather than a new level.
+ * - `prose` — the writing tunes. A line starting with a dash mid-paragraph is
+ *   far more likely to be dialogue than a bullet, so it is left as prose; a
+ *   real list still renders when a blank line announces it.
+ *
+ * Everything the renderer needs is in the object, so an unknown profile name
+ * still renders — the name is for the UI and for reading this table.
+ */
+const FORMAT = Object.freeze({
+  structured: { profile: 'structured', tables: true, listsInterruptParagraph: true, indentPerLevel: 2 },
+  reasoning: { profile: 'reasoning', tables: true, listsInterruptParagraph: true, indentPerLevel: 4 },
+  prose: { profile: 'prose', tables: true, listsInterruptParagraph: false, indentPerLevel: 4 },
+});
+
 /** @type {ReadonlyArray<Model>} */
 const MODELS = Object.freeze([
   {
@@ -62,6 +86,7 @@ const MODELS = Object.freeze([
     uncensored: true,
     accent: 'ember',
     defaults: { temperature: 0.7, top_p: 0.9, top_k: 40, repeat_penalty: 1.0, num_ctx: 16384 },
+    format: FORMAT.structured,
     blurb:
       'GAIN training adapts per-sample during the run; the author claims it beats the 27B. ' +
       'Thinks before answering, so expect reasoning time on hard prompts.',
@@ -79,6 +104,7 @@ const MODELS = Object.freeze([
     uncensored: true,
     accent: 'ember',
     defaults: { temperature: 0.7, top_p: 0.9, top_k: 40, repeat_penalty: 1.0, num_ctx: 16384 },
+    format: FORMAT.structured,
     blurb:
       'Same Claude 4.6 four-dataset tune as the thinking models with the reasoning block removed. ' +
       'Five to ten times less wall-clock per answer.',
@@ -96,6 +122,7 @@ const MODELS = Object.freeze([
     uncensored: true,
     accent: 'slate',
     defaults: { temperature: 0.6, top_p: 0.9, top_k: 40, repeat_penalty: 1.0, num_ctx: 8192 },
+    format: FORMAT.reasoning,
     blurb:
       'Qwen 3.5 27B contracted to 21B, then GLM 4.7 Flash tuned to shorten reasoning. ' +
       'Will not fit entirely in 8GB — some layers run on the CPU, so it is markedly slower.',
@@ -113,6 +140,7 @@ const MODELS = Object.freeze([
     uncensored: true,
     accent: 'moss',
     defaults: { temperature: 0.85, top_p: 0.92, top_k: 50, repeat_penalty: 1.0, num_ctx: 16384 },
+    format: FORMAT.prose,
     blurb:
       "DavidAU's character, POV and observation datasets at a size that leaves 4GB of VRAM spare. " +
       'Noticeably better prose than its size suggests.',
@@ -130,6 +158,7 @@ const MODELS = Object.freeze([
     uncensored: true,
     accent: 'moss',
     defaults: { temperature: 0.8, top_p: 0.9, top_k: 40, repeat_penalty: 1.0, num_ctx: 16384 },
+    format: FORMAT.reasoning,
     blurb:
       'Reasoning length scales itself down on easy prompts, so it rarely stalls. ' +
       'Genuinely less capable, but it answers in about a second.',
@@ -138,14 +167,18 @@ const MODELS = Object.freeze([
 
 // Object.freeze is shallow, so a spread copy still shares the same `defaults`
 // object. One `model.defaults.temperature = x` anywhere would change what every
-// later get() returns, process-wide.
+// later get() returns, process-wide. `format` is worse again: three models
+// share one FORMAT entry, so a caller editing it in place would re-format the
+// others too.
 export function all() {
-  return MODELS.map((m) => ({ ...m, defaults: { ...m.defaults } }));
+  return MODELS.map((m) => ({ ...m, defaults: { ...m.defaults }, format: { ...m.format } }));
 }
 
 export function get(id) {
   const found = MODELS.find((m) => m.id === id);
-  return found ? { ...found, defaults: { ...found.defaults } } : undefined;
+  return found
+    ? { ...found, defaults: { ...found.defaults }, format: { ...found.format } }
+    : undefined;
 }
 
 export function totalSizeGb() {

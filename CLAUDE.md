@@ -13,11 +13,14 @@ Offline chat client for uncensored Qwen 3.5 GGUF models. Runs on Tommy's machine
    one-time downloader, and `scripts/verify-urls.mjs`, which HEADs the Hugging Face
    URLs the catalog claims. Preflight holds that list and FAILs on any other file.
    The check catches a scheme-less URL as well as an `https` one.
-3. **Model output never reaches `innerHTML`.** `public/render.js` builds text nodes and
-   `<pre><code>` elements only, and it is the only module allowed to turn model output
-   into DOM. An uncensored local model is untrusted input like any other. Streamed
-   output must render identically to the same text re-rendered after a reload — that
-   equivalence is what `test/acceptance/i0-*.test.js` pins.
+3. **Model output never reaches `innerHTML`.** `public/render.js` parses the markdown
+   the models write and builds every element itself from text nodes; no string from a
+   model is ever handed to the DOM as markup, and it is the only module allowed to turn
+   model output into DOM. An uncensored local model is untrusted input like any other:
+   a tag the model writes is shown inert, with its attributes dropped, and a link whose
+   URL is not http, https or mailto loses the URL. Streamed output must render
+   identically to the same text re-rendered after a reload — that equivalence is what
+   `test/acceptance/i0-*.test.js` pins, and `i8-*` pins it again for markdown.
 4. **Loopback only.** The server binds `127.0.0.1` and rejects non-loopback `Origin`.
    Do not add a `0.0.0.0` bind or a CORS allowance.
 

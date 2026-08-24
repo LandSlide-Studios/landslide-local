@@ -6,7 +6,10 @@
  * streams replies.
  *
  * Model output is never inserted as HTML. All message rendering lives in
- * render.js, which builds text nodes and <pre><code> elements only.
+ * render.js, which parses the markdown the models write and builds the elements
+ * itself out of text nodes — nothing from a model is ever handed to the DOM as
+ * markup. Each model's `format` profile from the catalog is passed through with
+ * the text, so a reasoning trace and a page of prose are read differently.
  */
 
 import { renderText, appendStream } from './render.js';
@@ -506,14 +509,18 @@ function buildMessage(role, content = '', thinking = '', stats = null, { pending
   node.classList.add(role === 'user' ? 'msg-user' : 'msg-assistant');
   node.querySelector('.msg-role').textContent = role === 'user' ? 'You' : (currentModel()?.name ?? 'Model');
 
+  // How this model writes, straight from the catalog via /api/state. A user's
+  // own message is not a model's output, so it gets the neutral profile.
+  const format = role === 'user' ? undefined : currentModel()?.format;
+
   const think = node.querySelector('.think');
   if (thinking) {
     think.hidden = false;
-    renderText(node.querySelector('.think-text'), thinking);
+    renderText(node.querySelector('.think-text'), thinking, format);
   }
 
   const producedNothing = !pending && role !== 'user' && !content && !thinking;
-  renderText(node.querySelector('.msg-text'), producedNothing ? NO_OUTPUT : content);
+  renderText(node.querySelector('.msg-text'), producedNothing ? NO_OUTPUT : content, format);
   if (stats) node.querySelector('.msg-stats').textContent = statLine(stats);
   return node;
 }
@@ -649,12 +656,12 @@ async function send(text) {
   } catch (err) {
     if (err.name !== 'AbortError') {
       reply.classList.add('msg-error');
-      renderText(replyText, answer ? `${answer}\n\n[${err.message}]` : `[${err.message}]`);
+      renderText(replyText, answer ? `${answer}\n\n[${err.message}]` : `[${err.message}]`, model.format);
     }
   } finally {
     replyText.classList.remove('is-streaming');
     if (!answer && !reasoning && !reply.classList.contains('msg-error')) {
-      renderText(replyText, NO_OUTPUT);
+      renderText(replyText, NO_OUTPUT, model.format);
     }
     setBusy(false);
     state.abort = null;
