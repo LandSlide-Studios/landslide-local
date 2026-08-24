@@ -169,9 +169,13 @@ function askForToken(refused = false) {
 }
 
 function withToken(path, init) {
+  // Bare `fetch`, not `window.fetch`. They are the same function in a browser,
+  // but `window` does not exist under the headless UI test, and spelling it the
+  // browser-only way turned every one of those tests into "window is not
+  // defined" the moment the two changes met.
   const token = localStorage.getItem(TOKEN_KEY);
-  if (!token) return window.fetch(path, init);
-  return window.fetch(path, {
+  if (!token) return fetch(path, init);
+  return fetch(path, {
     ...init,
     headers: { ...(init.headers ?? {}), authorization: `Bearer ${token}` },
   });
