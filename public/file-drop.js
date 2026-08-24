@@ -7,10 +7,12 @@
  * like everything else typed there. An invisible attachment that silently
  * consumes two thirds of a 16k window is the failure mode this avoids.
  *
- * Three refusals, each with the number that caused it:
+ * Refusals, each naming the file and the reason:
  *   - anything that is not decodable text, because a GGUF pasted as mojibake
  *     helps nobody;
  *   - anything over the size cap, because the window is finite;
+ *   - anything unreadable, which is what a dragged FOLDER is;
+ *   - anything empty, which would insert a fence around nothing;
  *   - nothing at all, when a drag carries no files.
  *
  * The document-level handlers are not optional. A browser's default action for
@@ -38,8 +40,16 @@ async function readDropped(file) {
       error: got === cap ? `${name} is just over the ${cap} limit` : `${name} is ${got}; the limit is ${cap}`,
     };
   }
-  const buffer = await file.arrayBuffer();
-  const bytes = new Uint8Array(buffer);
+  let bytes;
+  try {
+    bytes = new Uint8Array(await file.arrayBuffer());
+  } catch {
+    // A folder dragged from the file manager is the likeliest cause, and it is
+    // the first thing anyone tries. A file moved or locked since the drag began
+    // is the other. Unguarded, this rejected out of Promise.all and took every
+    // OTHER file in the same drop with it, silently.
+    return { ok: false, name, error: `${name} could not be read — a folder, or a file that has moved` };
+  }
   // A NUL byte is the oldest and most reliable "this is not text" signal, and
   // it survives files that happen to be valid UTF-8 by accident.
   if (bytes.includes(0)) {
@@ -52,6 +62,7 @@ async function readDropped(file) {
   } catch {
     return { ok: false, name, error: `${name} is not valid UTF-8 text` };
   }
+  if (text.trim() === '') return { ok: false, name, error: `${name} is empty` };
   return { ok: true, name, text };
 }
 
@@ -105,15 +116,30 @@ function setDragging(on) {
   els.composer.classList.toggle('is-dropping', on);
 }
 
+/**
+ * Is this drag carrying files, as opposed to text?
+ *
+ * Dropping selected text onto a textarea is a standard browser affordance, and
+ * cancelling it broke that: the composer lit up promising to take what you were
+ * carrying, then swallowed it, because `dataTransfer.files` was empty and
+ * insertFiles returned early. Only file drags are ours.
+ */
+const carriesFiles = (e) => [...(e.dataTransfer?.types ?? [])].includes('Files');
+
 function initFileDrop({ onInserted }) {
   afterInsert = onInserted;
 
-  // Swallow the default everywhere in the window. Without this a miss navigates
-  // the page to the file and the conversation is gone.
+  // Swallow the default for FILE drags everywhere in the window. Without this a
+  // miss navigates the page to the file and the conversation is gone. A text
+  // drag is left completely alone.
   for (const type of ['dragover', 'drop']) {
     document.addEventListener(type, (e) => {
+      if (!carriesFiles(e)) return;
       e.preventDefault();
-      if (type === 'drop') setDragging(false);
+      // Reaching here at all means the composer's handler did not stop this
+      // event, so the pointer is somewhere else and the composer should stop
+      // advertising itself as the target.
+      setDragging(false);
     });
   }
   document.addEventListener('dragleave', (e) => {
@@ -123,14 +149,19 @@ function initFileDrop({ onInserted }) {
   });
 
   els.composer.addEventListener('dragover', (e) => {
+    if (!carriesFiles(e)) return;
     e.preventDefault();
+    e.stopPropagation();
     setDragging(true);
   });
   els.composer.addEventListener('drop', (e) => {
+    if (!carriesFiles(e)) return;
     e.preventDefault();
     e.stopPropagation();
     setDragging(false);
-    insertFiles(e.dataTransfer?.files ?? []);
+    insertFiles(e.dataTransfer?.files ?? []).catch((err) => {
+      notify(`Could not read what was dropped: ${err?.message ?? err}`);
+    });
   });
 }
 

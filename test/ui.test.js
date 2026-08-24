@@ -1386,13 +1386,22 @@ test('a resident model this build does not ship is shown but not offered for unl
     await waitFor('the panel', () => page.byId('vram').hidden === false, 30_000);
     dispatch(page.byId('vramToggle'), makeEvent('click'));
     const row = page.byId('vramList').querySelector('.vram-row');
-    assert.equal(row.querySelector('.vram-name').textContent, 'somebody-elses-model:latest', 'shown honestly');
+    assert.match(row.querySelector('.vram-name').textContent, /^somebody-elses-model:latest/, 'shown honestly');
     assert.equal(
       row.querySelector('.vram-unload').disabled,
       true,
       'the unload route validates against the catalog, so offering this would be offering a 400',
     );
-    assert.match(row.querySelector('.vram-unload').getAttribute('title') ?? '', /not one of this build/);
+    // A reason has to be readable. Browsers suppress pointer events on disabled
+    // controls, so a title on the button itself is a reason nobody can reach —
+    // asserting the attribute would be testing the author's intent, not the
+    // user's experience.
+    assert.match(
+      row.querySelector('.vram-name').textContent,
+      /not ours/,
+      'the greyed-out button needs a visible reason, not a suppressed tooltip',
+    );
+    assert.match(row.getAttribute('title') ?? '', /not one of this build/, 'and the full reason on the row, which is not disabled');
   } finally {
     await page.close();
     await stub.close();
@@ -1538,5 +1547,173 @@ test('a refused file inserts nothing and says why', async () => {
     assert.match(page.byId('noticeMsg').textContent, /model\.gguf/);
   } finally {
     await page.close();
+  }
+});
+
+/** A drag carrying files, and one carrying only text. */
+const fileDrag = (files = []) => ({ dataTransfer: { types: ['Files'], files } });
+const textDrag = () => ({ dataTransfer: { types: ['text/plain'], files: [] } });
+
+test('a file dropped anywhere in the window never navigates the page away', async () => {
+  const page = await mount({ script: SCRIPTED, delayMs: 4, chunkSize: 8 });
+  try {
+    // The browser's default action for a dropped file is to open it, which
+    // throws away the conversation and whatever was typed. Nothing else in this
+    // app can recover from that.
+    for (const target of [page.byId('thread'), page.byId('sidebar'), page.byId('chatList')]) {
+      assert.equal(
+        dispatch(target, makeEvent('dragover', fileDrag())),
+        false,
+        'a file dragged over the page must have its default cancelled',
+      );
+      assert.equal(
+        dispatch(target, makeEvent('drop', fileDrag())),
+        false,
+        'and so must the drop, wherever it lands',
+      );
+    }
+  } finally {
+    await page.close();
+  }
+});
+
+test('a text drag is left entirely alone', async () => {
+  const page = await mount({ script: SCRIPTED, delayMs: 4, chunkSize: 8 });
+  try {
+    // Dropping selected text on a textarea is a normal browser affordance.
+    // Cancelling it made the composer light up promising to accept the text and
+    // then eat it, because dataTransfer.files was empty.
+    assert.equal(
+      dispatch(page.byId('composer'), makeEvent('dragover', textDrag())),
+      true,
+      'a text drag over the composer must keep its default',
+    );
+    assert.equal(
+      page.byId('composer').classList.contains('is-dropping'),
+      false,
+      'and must not be advertised as a drop target we are going to swallow',
+    );
+    assert.equal(dispatch(page.byId('composer'), makeEvent('drop', textDrag())), true);
+  } finally {
+    await page.close();
+  }
+});
+
+test('the composer advertises itself only while a file is actually over it', async () => {
+  const page = await mount({ script: SCRIPTED, delayMs: 4, chunkSize: 8 });
+  try {
+    const composer = page.byId('composer');
+    dispatch(composer, makeEvent('dragover', fileDrag()));
+    assert.equal(composer.classList.contains('is-dropping'), true, 'lit while over it');
+
+    // Moving to somewhere else in the window has to put it out, or the composer
+    // goes on promising to catch something aimed at the sidebar.
+    dispatch(page.byId('sidebar'), makeEvent('dragover', fileDrag()));
+    assert.equal(composer.classList.contains('is-dropping'), false, 'and out once the pointer moves off');
+
+    dispatch(composer, makeEvent('dragover', fileDrag()));
+    dispatch(composer, makeEvent('drop', fileDrag()));
+    assert.equal(composer.classList.contains('is-dropping'), false, 'and out after a drop');
+  } finally {
+    await page.close();
+  }
+});
+
+test('one unreadable item does not take the rest of the drop with it', async () => {
+  const page = await mount({ script: SCRIPTED, delayMs: 4, chunkSize: 8 });
+  try {
+    const { insertFiles } = await import('../public/file-drop.js');
+    // A folder dragged from the file manager is the first thing anyone tries,
+    // and its arrayBuffer() rejects.
+    const folder = { name: 'src', size: 0, arrayBuffer: async () => { throw new Error('could not be read'); } };
+    await insertFiles([fakeFile('keep.txt', utf8('this must survive')), folder]);
+
+    assert.match(page.byId('prompt').value, /this must survive/, 'the readable file still lands');
+    assert.equal(page.byId('notice').hidden, false);
+    assert.match(page.byId('noticeMsg').textContent, /src/, 'and the one that failed is named');
+  } finally {
+    await page.close();
+  }
+});
+
+test('Ctrl+Shift+digit is somebody else’s shortcut and is left alone', async () => {
+  const page = await mount({ script: SCRIPTED, delayMs: 4, chunkSize: 8 });
+  try {
+    const active = () => page.byId('modelList').querySelector('.model.is-active').querySelector('.model-name').textContent;
+    const before = active();
+    const handled = dispatch(page.document, makeEvent('keydown', { key: '2', code: 'Digit2', ctrlKey: true, shiftKey: true }));
+    assert.equal(active(), before, 'the model must not change');
+    assert.equal(handled, true, 'and the keystroke must not be swallowed');
+  } finally {
+    await page.close();
+  }
+});
+
+test('Ctrl+digit does not drag the caret out of whatever field it was pressed in', async () => {
+  const page = await mount({ script: SCRIPTED, delayMs: 4, chunkSize: 8 });
+  try {
+    const search = page.byId('chatSearch');
+    search.focus();
+    page.document.activeElement = search; // the shim tracks focus by assignment
+    dispatch(page.document, makeEvent('keydown', { key: '2', code: 'Digit2', ctrlKey: true }));
+    assert.equal(
+      page.document.activeElement,
+      search,
+      'selectModel ends by focusing the composer, which is right for a click on a card and wrong mid-sentence',
+    );
+  } finally {
+    await page.close();
+  }
+});
+
+test('an Unload whose effect is not visible yet still gives the button back', async () => {
+  // Ollama answers done:true before the runner has actually gone, so the very
+  // next residency read usually still lists the model. Leaving the row to be
+  // replaced by a re-render that never comes stranded it disabled, reading
+  // "Unloading", with no way back short of a reload.
+  const stub = await stubOllamaWithResidency([resident('deckard-4b:latest', 2.5 * 1024 ** 3)]);
+  // Make the eviction invisible: accept it, but keep reporting the model.
+  const models = stub.models;
+  const original = models.length;
+  const page = await mount({ runtime: { adapter: 'ollama', ollamaUrl: stub.url } });
+  try {
+    await waitFor('the panel', () => page.byId('vram').hidden === false, 30_000);
+    dispatch(page.byId('vramToggle'), makeEvent('click'));
+    const button = page.byId('vramList').querySelector('.vram-unload');
+
+    // Put it straight back, so residency looks unchanged to the next poll.
+    const replace = () => models.push(resident('deckard-4b:latest', 2.5 * 1024 ** 3));
+    dispatch(button, makeEvent('click'));
+    await waitFor('the runtime to be asked', () => stub.unloads.length === 1, 30_000);
+    replace();
+    await waitFor('the button to come back', () => button.disabled === false, 30_000);
+
+    assert.equal(button.textContent, 'Unload', 'the label must not be stranded at "Unloading"');
+    assert.equal(original, 1);
+  } finally {
+    await page.close();
+    await stub.close();
+  }
+});
+
+test('the VRAM panel opens collapsed for every page, not just the first one of the session', async () => {
+  // `open` is module state and the module is imported once per process. A test
+  // that expands the panel used to leave it expanded for every mount after it,
+  // so "collapsed by default" was passing or failing on what ran before.
+  const stub = await stubOllamaWithResidency([resident('deckard-4b:latest', 2.5 * 1024 ** 3)]);
+  try {
+    const first = await mount({ runtime: { adapter: 'ollama', ollamaUrl: stub.url } });
+    await waitFor('the panel', () => first.byId('vram').hidden === false, 30_000);
+    dispatch(first.byId('vramToggle'), makeEvent('click'));
+    assert.equal(first.byId('vramList').hidden, false, 'expanded in the first page');
+    await first.close();
+
+    const second = await mount({ runtime: { adapter: 'ollama', ollamaUrl: stub.url } });
+    await waitFor('the panel again', () => second.byId('vram').hidden === false, 30_000);
+    assert.equal(second.byId('vramList').hidden, true, 'a fresh page starts collapsed regardless');
+    assert.equal(second.byId('vramToggle').getAttribute('aria-expanded'), 'false');
+    await second.close();
+  } finally {
+    await stub.close();
   }
 });

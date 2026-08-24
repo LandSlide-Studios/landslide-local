@@ -201,7 +201,6 @@ button, input, textarea { font-family: inherit; font-size: inherit; color: inher
 .vram-unload:hover:not(:disabled) { color: var(--cream); background: rgba(237, 233, 225, 0.14); }
 .vram-unload:disabled { opacity: 0.4; cursor: not-allowed; }
 
-
 .panel { display: flex; flex-direction: column; gap: 9px; min-height: 0; }
 .panel-grow { flex: 1; min-height: 0; }
 .panel-head { display: flex; align-items: center; justify-content: space-between; }

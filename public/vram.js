@@ -13,14 +13,23 @@
  */
 
 import { apiFetch } from './api-client.js';
-import { els, modelForTag, notify, state } from './dom.js';
+import { busyBlocks, els, modelForTag, notify, state } from './dom.js';
 
 /** Set by initVram(). Runs after an unload lands, to re-read residency. */
 let refreshRuntime = async () => {};
 let open = false;
+/** What the list currently shows, so a poll only redraws when it would differ. */
+let drawn = null;
 
 function initVram({ onChanged }) {
   refreshRuntime = onChanged;
+  // Reset, not just assign. This is module state and the module is imported
+  // once per process: a test that expands the panel leaves it expanded for
+  // every mount after it, and the next test's "collapsed by default" assertion
+  // is then passing or failing on what ran before it.
+  open = false;
+  drawn = null;
+  applyOpen();
   els.vramToggle.addEventListener('click', () => {
     open = !open;
     applyOpen();
@@ -32,7 +41,8 @@ function applyOpen() {
   els.vramToggle.setAttribute('aria-expanded', String(open));
 }
 
-const gb = (n) => `${Number(n).toFixed(2)} GB`;
+/** `/api/ps` has been seen without a size; "NaN GB" is worse than no number. */
+const gb = (n) => (Number.isFinite(Number(n)) ? `${Number(n).toFixed(2)} GB` : 'size unknown');
 
 /**
  * Ask the runtime to drop one model now.
@@ -45,6 +55,10 @@ const gb = (n) => `${Number(n).toFixed(2)} GB`;
  * has to keep saying so.
  */
 async function unloadOne(model, button) {
+  // Every other action that can destroy in-flight work refuses while one is
+  // running. Evicting the model that is mid-reply is the most destructive of
+  // them, and it was the only one still live.
+  if (busyBlocks('Unloading a model')) return;
   button.disabled = true;
   const was = button.textContent;
   button.textContent = 'Unloading';
@@ -63,12 +77,29 @@ async function unloadOne(model, button) {
     button.disabled = false;
     button.textContent = was;
   } finally {
+    // Restored unconditionally, and NOT left to the re-render to replace.
+    // Ollama answers done:true before the runner is actually gone, so the very
+    // next residency read usually still lists the model - no change, no
+    // redraw, and the row stays disabled reading "Unloading" with no way back.
+    button.disabled = false;
+    button.textContent = was;
     await refreshRuntime();
   }
 }
 
+/** Names and sizes: everything the list draws. */
+const listSignature = (loaded) => loaded.map((m) => `${m.name}@${m.sizeGb}`).join('|');
+
 function renderVram() {
   const loaded = state.loaded ?? [];
+  const signature = listSignature(loaded);
+  // The rail gates its redraw on a signature because rebuilding a radiogroup
+  // destroys focus. This list has its own signature for the same reason and its
+  // own trigger, so a residency change redraws it even when nothing the rail
+  // cares about moved.
+  if (signature === drawn) return;
+  drawn = signature;
+
   if (loaded.length === 0) {
     els.vram.hidden = true;
     els.vramList.replaceChildren();
@@ -110,9 +141,12 @@ function renderVram() {
         // The unload route validates against the catalog, so offering this would
         // be offering a 400. Something else loaded it; something else can drop it.
         button.disabled = true;
-        button.title =
+        // On the ROW, not the button: browsers suppress pointer events on a
+        // disabled control, so a title there is a reason nobody can read.
+        row.title =
           `${entry.name} is resident but is not one of this build's models, ` +
           'so this app will not unload it.';
+        name.append(document.createTextNode(' · not ours'));
       }
 
       row.append(name, size, button);

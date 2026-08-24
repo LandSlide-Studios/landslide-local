@@ -130,13 +130,10 @@ function renderModelHint() {
   ctrl.textContent = 'Ctrl';
   const first = document.createElement('kbd');
   first.textContent = '1';
-  els.modelHint.append(ctrl, document.createTextNode('+'), first);
-  if (n > 1) {
-    const last = document.createElement('kbd');
-    last.textContent = String(n);
-    els.modelHint.append(document.createTextNode('–'), last);
-  }
-  els.modelHint.append(document.createTextNode(' model'));
+  const last = document.createElement('kbd');
+  last.textContent = String(n);
+  // n >= 2 is guaranteed by the early return above.
+  els.modelHint.append(ctrl, document.createTextNode('+'), first, document.createTextNode('–'), last, document.createTextNode(' model'));
 }
 
 /* ---------------- sending ---------------- */
@@ -281,13 +278,23 @@ function wireEvents() {
     // preventDefault matters more than usual here — Ctrl+1..8 switches browser
     // tab in Chrome, and losing the window is a worse outcome than the shortcut
     // simply not working.
-    if ((e.ctrlKey || e.metaKey) && !e.altKey && /^Digit[1-9]$/.test(e.code)) {
+    // !altKey rules out AltGr, which is Ctrl+Alt on European layouts; !shiftKey
+    // because Ctrl+Shift+digit is somebody else's shortcut and swallowing it is
+    // not ours to do.
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && /^Digit[1-9]$/.test(e.code)) {
       const at = Number(e.code.slice(5)) - 1;
       // Out of range does nothing AND does not swallow the keystroke: with three
       // models loaded, Ctrl+4 should still be the browser's to handle.
       if (at < state.models.length) {
         e.preventDefault();
+        // A shortcut that works from anywhere must not drag the caret out of
+        // wherever "anywhere" happened to be. selectModel ends by focusing the
+        // composer, which is right for a click on a card and wrong for a
+        // keystroke pressed mid-sentence in the system prompt or the search box.
+        const typing = document.activeElement;
+        const inAField = typing && typing !== els.prompt && /^(INPUT|TEXTAREA|SELECT)$/.test(typing.tagName ?? '');
         selectModel(state.models[at].id);
+        if (inAField) typing.focus();
       }
     }
     if (e.key === 'Escape' && state.busy) state.abort?.abort();

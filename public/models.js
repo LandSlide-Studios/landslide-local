@@ -81,12 +81,16 @@ async function refreshRuntime() {
       state.runtimeSig = signature;
       renderRuntime(runtime);
       renderModels();
-      renderVram();
     } else {
       state.runtimeUp = runtime.running === true;
       state.loaded = runtime.loaded ?? [];
       state.canWarm = runtime.canWarm === true;
     }
+    // Outside the gate on purpose. That signature exists to stop the rail
+    // rebuilding and destroying focus; residency can move without it changing,
+    // and when it does this list is the one thing that has to notice.
+    // renderVram() has its own signature and is a no-op when nothing differs.
+    renderVram();
 
     // A runtime that has just come back has an empty VRAM whatever this page
     // remembers loading into it.
