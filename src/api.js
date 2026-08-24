@@ -34,6 +34,13 @@ export function createApi({ store, runtime, config, supervisor }) {
   ];
 
   /**
+   * The adapters the supervisor can actually drive. It speaks Ollama's HTTP API
+   * and nothing else, so under any other adapter both start and warm would act
+   * on a DIFFERENT process from the one configured to answer.
+   */
+  const SUPERVISED_ADAPTERS = new Set(['ollama']);
+
+  /**
    * One answer to "is anything actually answering", shared by /api/runtime and
    * /api/state so the two cannot disagree.
    *
@@ -41,10 +48,15 @@ export function createApi({ store, runtime, config, supervisor }) {
    * `runtime.adapter` is llamacpp is reporting a different process's state as
    * this one's: the page warned correctly on load, then twelve seconds later
    * announced "ollama ready" and hid the warning while nothing could answer.
+   *
+   * `canWarm` is here for the same reason `canStart` is: whether an affordance
+   * does anything is a fact about the configured backend, and the page has to be
+   * told it rather than deciding it. Under llamacpp all five Preload buttons
+   * rendered, and each one loaded a model into Ollama.
    */
   async function runtimeView() {
     const [health, sup] = await Promise.all([runtime.health(), boss.status()]);
-    const supervised = health.adapter === 'ollama';
+    const supervised = SUPERVISED_ADAPTERS.has(health.adapter);
     return {
       adapter: health.adapter,
       running: health.ok,
@@ -52,9 +64,25 @@ export function createApi({ store, runtime, config, supervisor }) {
       error: health.ok ? null : (health.error ?? 'not reachable'),
       loaded: health.ok && supervised ? sup.loaded : [],
       canStart: supervised && sup.canStart,
+      canWarm: supervised,
       bin: supervised ? sup.bin : null,
       starting: supervised ? sup.starting : false,
     };
+  }
+
+  /**
+   * Refuse before the supervisor is touched. A hidden button is a courtesy; the
+   * endpoint is the guarantee. `POST /api/runtime/start` under llamacpp
+   * answered {"ok":true,"alreadyRunning":true} — Ollama's state, reported as the
+   * configured runtime's — and warm loaded a model into that same wrong process.
+   */
+  async function requireSupervised(action) {
+    const { adapter } = await runtime.health();
+    if (SUPERVISED_ADAPTERS.has(adapter)) return;
+    throw httpError(
+      409,
+      `cannot ${action}: runtime.adapter is "${adapter}" and this app can only drive ollama`,
+    );
   }
 
   async function runtimeStatus() {
@@ -62,15 +90,18 @@ export function createApi({ store, runtime, config, supervisor }) {
   }
 
   async function startRuntime() {
+    await requireSupervised('start the model server');
     const result = await boss.start();
     return { result, runtime: await runtimeView() };
   }
 
   async function warmModel(_m, body) {
     // Only a model this app ships may be preloaded; the id never reaches the
-    // runtime unvalidated.
+    // runtime unvalidated. A bad id is the caller's mistake whatever the backend
+    // is, so it keeps answering 400 before the backend question is asked.
     const model = catalog.get(body?.modelId);
     if (!model) throw httpError(400, `unknown model: ${body?.modelId}`);
+    await requireSupervised('preload a model');
     return { result: await boss.warm(model.id) };
   }
 

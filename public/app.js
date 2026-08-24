@@ -49,6 +49,7 @@ const state = {
   busy: false,
   loaded: [],
   runtimeUp: false,
+  canWarm: false,
   runtimeSig: null,
   hardwareLabel: '',
   abort: null,
@@ -97,6 +98,9 @@ function renderRuntime(view) {
   const adapter = view.adapter ?? 'runtime';
   state.runtimeUp = view.running === true;
   state.loaded = view.loaded ?? [];
+  // Whether this backend can be preloaded at all is the server's answer, not a
+  // string comparison the page invents. The supervisor speaks Ollama only.
+  state.canWarm = view.canWarm === true;
 
   els.runtimeState.textContent = view.running
     ? `${adapter} ready · ${state.hardwareLabel ?? ''}`
@@ -154,6 +158,7 @@ async function refreshRuntime() {
     } else {
       state.runtimeUp = runtime.running === true;
       state.loaded = runtime.loaded ?? [];
+      state.canWarm = runtime.canWarm === true;
     }
 
     if (!wasUp && runtime.running) await loadChats(els.chatSearch.value);
@@ -169,13 +174,18 @@ async function startRuntime() {
   els.runtimeMsg.textContent = 'Launching Ollama and waiting for it to answer...';
 
   try {
-    const { result } = await (await fetch('/api/runtime/start', { method: 'POST' })).json();
-    if (result.ok) {
+    const res = await fetch('/api/runtime/start', { method: 'POST' });
+    const payload = await res.json().catch(() => null);
+    const result = payload?.result;
+    if (res.ok && result?.ok) {
       els.runtimeMsg.textContent = `Ollama ${result.version} is up.`;
       await refreshRuntime();
     } else {
       els.runtimeBar.classList.remove('is-working');
-      els.runtimeMsg.textContent = result.error ?? 'Could not start Ollama.';
+      // A refused start — the configured backend is not one the supervisor can
+      // drive — answers with an error and no result. Reading .ok off undefined
+      // threw a TypeError into the catch and showed that instead of the reason.
+      els.runtimeMsg.textContent = result?.error ?? payload?.error ?? 'Could not start Ollama.';
       els.startRuntime.disabled = false;
       els.startRuntime.textContent = 'Try again';
     }
@@ -299,7 +309,9 @@ function renderModels() {
         res.className = 'model-resident';
         res.textContent = 'in VRAM';
         meta.append(res);
-      } else if (state.runtimeUp) {
+      } else if (state.runtimeUp && state.canWarm) {
+        // Under llamacpp this button loaded the model into Ollama — a different
+        // process from the one configured to answer — and reported success.
         const warm = document.createElement('button');
         warm.type = 'button';
         warm.className = 'model-warm';
@@ -446,6 +458,10 @@ async function openChat(id) {
 }
 
 async function deleteChat(id) {
+  // Same door as new-chat and the chat rows: deleting the chat being written
+  // into detaches the node the stream targets, and the generation runs on with
+  // nowhere to land. Deleting any OTHER chat is harmless and stays allowed.
+  if (id === state.chatId && busyBlocks('Deleting this chat')) return;
   await fetch(`/api/chats/${id}`, { method: 'DELETE' });
   if (state.chatId === id) {
     state.chatId = null;
@@ -470,7 +486,22 @@ function renderThread(chat) {
   scrollToEnd();
 }
 
-function buildMessage(role, content = '', thinking = '', stats = null) {
+/** What a finished turn that produced nothing shows — while streaming and after. */
+const NO_OUTPUT = '[no output]';
+
+/**
+ * Build one message node.
+ *
+ * `pending` marks the empty shell a stream is about to be written into; every
+ * other call is a finished turn, including the ones rebuilt from disk on reload.
+ * Both reasoning and answer therefore go through render.js here, exactly as the
+ * stream does. Reasoning used to be assigned with `textContent`: a model that
+ * emitted a code fence — which reasoning models do constantly — showed a real
+ * code block while it thought and literal backticks plus a stray language tag
+ * after F5. The placeholder has the same problem in reverse: the stream wrote
+ * [no output] and the reload wrote nothing.
+ */
+function buildMessage(role, content = '', thinking = '', stats = null, { pending = false } = {}) {
   const node = els.tpl.content.firstElementChild.cloneNode(true);
   node.classList.add(role === 'user' ? 'msg-user' : 'msg-assistant');
   node.querySelector('.msg-role').textContent = role === 'user' ? 'You' : (currentModel()?.name ?? 'Model');
@@ -478,10 +509,11 @@ function buildMessage(role, content = '', thinking = '', stats = null) {
   const think = node.querySelector('.think');
   if (thinking) {
     think.hidden = false;
-    node.querySelector('.think-text').textContent = thinking;
+    renderText(node.querySelector('.think-text'), thinking);
   }
 
-  renderText(node.querySelector('.msg-text'), content);
+  const producedNothing = !pending && role !== 'user' && !content && !thinking;
+  renderText(node.querySelector('.msg-text'), producedNothing ? NO_OUTPUT : content);
   if (stats) node.querySelector('.msg-stats').textContent = statLine(stats);
   return node;
 }
@@ -549,7 +581,7 @@ async function send(text) {
   if (els.thread.contains(els.emptyState)) els.thread.removeChild(els.emptyState);
 
   els.thread.append(buildMessage('user', text));
-  const reply = buildMessage('assistant', '');
+  const reply = buildMessage('assistant', '', '', null, { pending: true });
   const replyText = reply.querySelector('.msg-text');
   const think = reply.querySelector('.think');
   const thinkText = reply.querySelector('.think-text');
@@ -622,7 +654,7 @@ async function send(text) {
   } finally {
     replyText.classList.remove('is-streaming');
     if (!answer && !reasoning && !reply.classList.contains('msg-error')) {
-      renderText(replyText, '[no output]');
+      renderText(replyText, NO_OUTPUT);
     }
     setBusy(false);
     state.abort = null;

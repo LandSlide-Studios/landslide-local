@@ -74,3 +74,40 @@ convention exists because the unescaped version is a confusing JSON failure.
 OpenAI-compatible server would reject the request. Fine while llama-server is the
 only target — worth a comment saying so, since the file describes itself as
 "OpenAI-compatible".
+
+## E8. `I0b-F9g` can never read a test count, whatever the README says
+
+`test/acceptance/i0b-verifier-findings.test.js` parses `# tests (\d+)` out of a
+nested `node --test` run. The outer runner exports `NODE_TEST_CONTEXT=child-v8`,
+`execFile` inherits it, and the nested runner therefore emits the V8-serialised
+child stream instead of TAP — its stdout is empty. Measured: `o.length === 0`,
+`/^# tests (\d+)$/m.test(o) === false`, while the same command standalone prints
+`# tests 79`.
+
+So the comparison branch is unreachable and the assertion can only ever hold by
+the README not making a `N tests, no model needed` claim at all — which is what
+round 2 did, and is the right outcome for a different reason (the count was
+attached to `npm test`, which no longer runs only those suites). Recorded because
+the test reads as if it verifies the number, and it does not. Passing
+`env: { ...process.env, NODE_TEST_CONTEXT: undefined }` to `run()` would make it
+real. Acceptance files are not the builder's to edit; this is for the planner.
+
+## E9. A stale app process from an earlier round is still listening on 4399
+
+`http://127.0.0.1:4399` answers with this app running pre-round-2 code — its
+`/api/state` has no `supervisor` key at all — against
+`chatsDir=N:\landslide-local\.smoke-chats`. It survived whatever session started
+it. Left running: killing someone else's process is not this round's call. Worth
+knowing before the next smoke test picks that port, and worth noting that
+`.smoke-chats` is not in `.gitignore` the way `.demo-chats/` is, so a run that
+leaves the folder behind shows up as untracked repo content.
+
+## E10. `start-demo.cmd` no longer offers Preload, and that is the fix working
+
+The fake adapter is not one the supervisor can drive, so `canWarm` is false and
+the demo's five Preload buttons are gone. Verified live: adapter `fake` on 4401
+renders 5 model cards and 0 Preload buttons, and `POST /api/runtime/warm` there
+answers 409. Before F9-C those buttons were live in the demo and loaded models
+into a real Ollama. Flagged only because the README's demo paragraph does not
+mention preload either way — nothing to correct, but the demo does look sparser
+than it did.

@@ -9,8 +9,10 @@ Offline chat client for uncensored Qwen 3.5 GGUF models. Runs on Tommy's machine
    one appears. The whole point is that this installs and runs with no network.
 2. **No external hosts anywhere in `src/` or `public/`.** No CDN scripts, no Google
    Fonts link, no remote images. Fonts are local `.woff2` files in `public/fonts`.
-   `scripts/fetch-models.mjs` is the single exempt file — it is the one-time downloader.
-   Preflight greps for this and FAILs on a violation.
+   Two files are exempt from that grep and no others: `scripts/fetch-models.mjs`, the
+   one-time downloader, and `scripts/verify-urls.mjs`, which HEADs the Hugging Face
+   URLs the catalog claims. Preflight holds that list and FAILs on any other file.
+   The check catches a scheme-less URL as well as an `https` one.
 3. **Model output never reaches `innerHTML`.** `public/render.js` builds text nodes and
    `<pre><code>` elements only, and it is the only module allowed to turn model output
    into DOM. An uncensored local model is untrusted input like any other. Streamed
@@ -69,12 +71,17 @@ them is hypothetical.
 ## Before calling anything done
 
 ```
-node --test                  # must be all green
-node scripts/preflight.mjs   # must be 0 FAIL
-node scripts/verify-live.mjs # must reach a real model
+npm run test:core                          # the five core suites — must be 79/79
+node scripts/acceptance-lock.mjs --verify  # the target has not moved
+node scripts/preflight.mjs                 # must be 0 FAIL
+node scripts/verify-live.mjs               # must reach a real model
 ```
 
-The first two never touch a model. Three real bugs shipped past them because the
+`npm test` is bare auto-discovery: it also picks up the acceptance suites for queue
+items that have not been built yet, and those fail by design until they are. It is a
+progress reading, not a gate. The five core suites above are the gate.
+
+The first three never touch a model. Three real bugs shipped past them because the
 fake adapter emits 200-character scripts with inline `<think>` tags, and Ollama does
 neither. **A change to the runtime layer is not verified until `verify-live.mjs`
 passes.**

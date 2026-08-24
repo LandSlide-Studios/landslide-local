@@ -198,13 +198,17 @@ export function withAvailability(installedTags = []) {
  * @returns {Record<string, number>}
  */
 export function optionsFor(model, asked = {}) {
+  const defaults = model?.defaults ?? {};
   const overrides = asked && typeof asked === 'object' && !Array.isArray(asked) ? asked : {};
-  const merged = { ...(model?.defaults ?? {}), ...overrides };
 
   const out = {};
   for (const [key, limit] of Object.entries(OPTION_LIMITS)) {
-    if (!(key in merged)) continue;
-    const value = clampOption(merged[key], limit);
+    // An override that cannot be read as a number falls back to the MODEL's
+    // default rather than dropping the key. Dropping it looked conservative and
+    // was not: temperature: "abc" removed temperature from the request, so the
+    // runner answered at its own default instead of this model's tuned one.
+    let value = key in overrides ? clampOption(overrides[key], limit) : null;
+    if (value === null && key in defaults) value = clampOption(defaults[key], limit);
     if (value !== null) out[key] = value;
   }
   return out;

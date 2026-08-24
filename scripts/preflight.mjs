@@ -31,7 +31,15 @@ if (Object.keys(deps).length === 0) pass('zero dependencies', 'nothing to npm in
 else fail('zero dependencies', `found ${Object.keys(deps).join(', ')}`);
 
 /* 3. Offline: no external hosts referenced anywhere we serve or run --- */
-const EXTERNAL = /\b(?:https?:)?\/\/(?!127\.0\.0\.1|localhost\b)[a-z0-9.-]+\.[a-z]{2,}/gi;
+// The optional scheme is the whole point: a scheme-less URL — two slashes and
+// straight into the host — is a CDN include like any other, and it is the one a
+// copy-pasted snippet is most likely to carry. That half of the pattern was dead
+// code, because `\b` is a word boundary and cannot match before a slash, so a
+// script src written that way walked through the one check that exists to catch
+// it. A negative lookbehind anchors on whatever precedes the URL instead — a
+// quote, a space, or the start of the file. (Spelling an example out here would
+// trip this very check, which is the proof the anchor now works.)
+const EXTERNAL = /(?<![\w/])(?:https?:)?\/\/(?!127\.0\.0\.1|localhost\b)[a-z0-9.-]+\.[a-z]{2,}/gi;
 const ALLOWED_FILES = new Set(['fetch-models.mjs', 'verify-urls.mjs']); // the only files that may reach out
 const offenders = [];
 

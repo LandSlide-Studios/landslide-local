@@ -10,6 +10,7 @@
   "scripts": {
     "start": "node src/server.js",
     "test": "node --test --test-force-exit",
+    "test:core": "node --test --test-force-exit test/chat-store.test.js test/think-stream.test.js test/runtime.test.js test/api.test.js test/regression.test.js",
     "preflight": "node scripts/preflight.mjs",
     "fetch-models": "node scripts/fetch-models.mjs",
     "test:acceptance": "node --test --test-force-exit \"test/acceptance/*.test.js\"",

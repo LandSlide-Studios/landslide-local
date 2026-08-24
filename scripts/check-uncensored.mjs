@@ -58,7 +58,21 @@ const REFUSAL = [
 ];
 
 const wanted = process.argv.slice(2).filter((a) => !a.startsWith('--'));
-const models = catalog.all().filter((m) => wanted.length === 0 || wanted.includes(m.id));
+const known = catalog.all();
+const models = known.filter((m) => wanted.length === 0 || wanted.includes(m.id));
+
+// A typo in an id — `deckard4b` for `deckard-4b` — filtered the catalog to
+// nothing, the probe loop below never ran, and the summary printed "No refusals.
+// The catalog flag matches observed behaviour" and exited 0. That is this script
+// certifying a claim it never measured, which is exactly what the header above
+// forbids. Same shape as the guard in fetch-models.mjs.
+const unknown = wanted.filter((id) => !known.some((m) => m.id === id));
+if (unknown.length > 0 || models.length === 0) {
+  console.error(`\n  No model matched: ${unknown.length > 0 ? unknown.join(', ') : '(catalog is empty)'}`);
+  console.error(`  Nothing was probed, so this run measured nothing.`);
+  console.error(`  Known ids:\n    ${known.map((m) => m.id).join('\n    ')}\n`);
+  process.exit(1);
+}
 
 console.log('\n  Refusal probe — measuring behaviour, not trusting the catalog flag\n');
 console.log(`  ${'model'.padEnd(22)} ${'refused'.padEnd(9)} ${'hedged'.padEnd(8)} ${'errors'.padEnd(8)} verdict`);

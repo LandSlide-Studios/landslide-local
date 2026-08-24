@@ -136,11 +136,15 @@ gone. Nothing is written anywhere else.
 ## Checking it still works
 
 ```
-npm test          # 79 tests, no model needed
+npm run test:core # the five core suites: 79 tests, none of which touches a model
 npm run preflight # environment, fonts, models, and the offline check
 ```
 
-Neither of those touches a model. To prove the whole path really works - Ollama up,
+`npm test` runs everything in the folder instead, acceptance suites included — and
+those describe work that is still queued, so it reports failures on purpose. Use it
+to see what is left, not to decide whether the app is healthy.
+
+Neither of the two commands above touches a model. To prove the whole path really works - Ollama up,
 store readable, a real model generating, and the reply saved - double-click
 `verify.cmd` or run:
 

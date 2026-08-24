@@ -90,11 +90,23 @@ function previewOf(chat) {
   return text.length > 90 ? `${text.slice(0, 90)}...` : text;
 }
 
+/**
+ * Titles are capped where they are created as well as where they are patched.
+ * Only the patch door was guarded, so a title handed to POST /api/chats reached
+ * disk at whatever length the caller sent and came back in every list response.
+ * One cap, used by both.
+ */
+const MAX_TITLE = 120;
+
+function cleanTitle(value) {
+  return typeof value === 'string' ? value.trim().slice(0, MAX_TITLE) : '';
+}
+
 function blankChat({ title, modelId }) {
   const ts = nowIso();
   return {
     id: newId(),
-    title: title?.trim() || 'New chat',
+    title: cleanTitle(title) || 'New chat',
     modelId: modelId ?? null,
     createdAt: ts,
     updatedAt: ts,
@@ -141,7 +153,8 @@ function applyAppend(chat, message) {
 
 function applyPatch(chat, patch) {
   const next = { ...chat, updatedAt: nowIso() };
-  if (typeof patch.title === 'string' && patch.title.trim()) next.title = patch.title.trim().slice(0, 120);
+  const title = cleanTitle(patch.title);
+  if (title) next.title = title;
   if (typeof patch.modelId === 'string' || patch.modelId === null) next.modelId = patch.modelId;
   return next;
 }
