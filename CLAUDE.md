@@ -29,11 +29,11 @@ Offline chat client for uncensored Qwen 3.5 GGUF models. Runs on Tommy's machine
 
 | Path | Holds |
 |---|---|
-| `N:\landslide-local` | the app (this folder) — SATA SSD, not the M.2 |
-| `N:\models` | the GGUF files, ~22.8 GB. Never inside the repo; `.gitignore` excludes `*.gguf` |
-| `N:\landslide-local\chats` | one JSON file per conversation |
+| `<repo>` | the app (this folder) — SATA SSD, not the M.2 |
+| the folder `storage.modelsDir` points at | the GGUF files, ~22.8 GB. Never inside the repo; `.gitignore` excludes `*.gguf` |
+| `<repo>/chats` | one JSON file per conversation |
 
-`C:` is the M.2 NVMe with only ~75 GB free — do not put models there.
+Keep the GGUFs off the boot drive if it is short of space; they are ~21 GiB.
 
 ## Architecture
 

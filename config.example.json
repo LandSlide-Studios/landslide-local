@@ -1,11 +1,12 @@
 {
+  "_comment": "Copy to config.local.json and edit. Git ignores config.local.json, so nothing here about your machine ever gets committed.",
   "storage": {
-    "chatsDir": "N:/landslide-local/chats",
-    "modelsDir": "N:/models"
+    "chatsDir": "D:/landslide-local/chats",
+    "modelsDir": "D:/models"
   },
   "runtime": {
     "ollamaEnv": {
-      "OLLAMA_MODELS": "N:\\ollama-models",
+      "OLLAMA_MODELS": "D:/ollama-models",
       "OLLAMA_FLASH_ATTENTION": "1",
       "OLLAMA_KV_CACHE_TYPE": "q8_0",
       "OLLAMA_CONTEXT_LENGTH": "16384"
