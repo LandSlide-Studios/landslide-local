@@ -8,6 +8,7 @@
  * disagreeing is a bug the user experiences as "it broke, then it fixed itself".
  */
 
+import { closeAgainMenu } from './again-menu.js';
 import { NO_OUTPUT, els, modelById, scrollToEnd, state, statLine } from './dom.js';
 import { renderText } from './render.js';
 
@@ -95,7 +96,12 @@ function updateChatActions() {
   if (state.chatId) els.exportChat.setAttribute('href', `/api/chats/${state.chatId}/export?format=md`);
   else els.exportChat.removeAttribute('href');
   els.exportChat.setAttribute('aria-disabled', String(!state.chatId));
-  els.regenerate.disabled = !state.chatId || state.busy || !hasReply();
+  const noReply = !state.chatId || state.busy || !hasReply();
+  els.regenerate.disabled = noReply;
+  // The caret is the same action by another door and has to die with it —
+  // otherwise a menu left open over a streaming reply still fires.
+  els.regenerateWith.disabled = noReply;
+  if (noReply) closeAgainMenu();
 }
 
 /* ---------------- thread rendering ---------------- */

@@ -793,6 +793,79 @@ kbd {
 
 .composer-actions { display: flex; align-items: center; gap: 8px; flex: none; }
 
+/* ---------- Again, with a different model ---------- */
+
+/* Two ordinary buttons side by side rather than a fused split control. A real
+   split would need the pair to share one border and one offset shadow, and the
+   press animation moves each button independently — the join would come apart
+   for 80ms on every hover, which looks broken rather than deliberate. */
+/* stretch, not center: the caret button's only child is the visually-hidden
+   label, which is position:absolute and contributes no height, so a centred
+   caret collapsed to its padding — 12px next to a 29px Again. */
+.again { position: relative; display: flex; align-items: stretch; gap: 6px; }
+
+/* The caret is drawn, not typed. Bebas Neue has no U+25BE, so the character
+   fell through to whatever the fallback stack could manage and rendered as a
+   stub. A border triangle depends on no font at all and inherits the button's
+   colour, so it stays correct through hover, focus and disabled. */
+.btn-split-more {
+  position: relative;
+  width: 30px;
+  padding-left: 0;
+  padding-right: 0;
+}
+.btn-split-more::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 0;
+  height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 6px solid currentColor;
+}
+
+.again-menu {
+  position: absolute;
+  right: 0;
+  /* Opens upward: this sits at the bottom of the window and a downward menu
+     would be off-screen. */
+  bottom: calc(100% + 9px);
+  z-index: 5;
+  min-width: 216px;
+  display: flex;
+  flex-direction: column;
+  padding: 5px;
+  gap: 2px;
+  background: var(--ink);
+  border: 2px solid var(--ink);
+  border-radius: var(--r);
+  box-shadow: var(--sh-lg);
+}
+
+.again-item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 6px 9px;
+  background: transparent;
+  border: 2px solid transparent;
+  border-radius: var(--r);
+  color: var(--cream);
+  text-align: left;
+  cursor: pointer;
+}
+.again-item:hover { background: rgba(237, 233, 225, 0.12); border-color: rgba(237, 233, 225, 0.35); }
+.again-item:focus-visible { outline: none; background: rgba(237, 233, 225, 0.16); border-color: var(--cream); }
+
+.again-item-name { font-family: var(--font-display); font-size: 14px; letter-spacing: 0.06em; }
+.again-item-fit { font-size: 10.5px; letter-spacing: 0.04em; opacity: 0.85; }
+.again-item.is-current .again-item-fit { color: rgba(237, 233, 225, 0.55); }
+
+
 /* The Export control is an <a download> so the link works with no script at
    all; these two rules are the only thing that makes it read as a button. */
 #exportChat {

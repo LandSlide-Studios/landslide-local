@@ -966,3 +966,126 @@ test('a chat modelId that is not a plausible model tag is refused', async () => 
     await page.close();
   }
 });
+
+/* ------------------------------------------------------------------ */
+/* Again, with a different model                                       */
+/* ------------------------------------------------------------------ */
+
+test('the Again menu lists every model and marks the current one', async () => {
+  const page = await mount({ script: SCRIPTED, delayMs: 4, chunkSize: 8 });
+  try {
+    page.submit('a question');
+    await waitFor('the reply', () => finished(page.byId('thread')), 30_000);
+
+    const trigger = page.byId('regenerateWith');
+    const menu = page.byId('regenerateMenu');
+    assert.equal(menu.hidden, true, 'the menu starts closed');
+    assert.equal(trigger.getAttribute('aria-expanded'), 'false');
+
+    dispatch(trigger, makeEvent('click'));
+    assert.equal(menu.hidden, false, 'the caret opens it');
+    assert.equal(trigger.getAttribute('aria-expanded'), 'true', 'and says so to assistive tech');
+
+    const items = menu.querySelectorAll('.again-item');
+    const railCards = page.byId('modelList').querySelectorAll('.model');
+    assert.equal(items.length, railCards.length, 'every model the rail offers is offered here');
+    assert.equal(
+      items.filter((i) => i.className.includes('is-current')).length,
+      1,
+      'exactly one entry is the model this chat is already on',
+    );
+  } finally {
+    await page.close();
+  }
+});
+
+test('choosing a model from the Again menu regenerates with it and moves the chat onto it', async () => {
+  const page = await mount({ script: SCRIPTED, delayMs: 4, chunkSize: 8 });
+  try {
+    const thread = page.byId('thread');
+    page.submit('a question');
+    await waitFor('the first reply', () => finished(thread), 30_000);
+
+    const startedOn = thread.querySelector('.msg-assistant').querySelector('.msg-role').textContent;
+    const { chats } = await (await fetch(`${page.base}/api/chats`)).json();
+    const chatId = chats[0].id;
+
+    dispatch(page.byId('regenerateWith'), makeEvent('click'));
+    const other = page
+      .byId('regenerateMenu')
+      .querySelectorAll('.again-item')
+      .find((i) => i.querySelector('.again-item-name').textContent !== startedOn);
+    const otherName = other.querySelector('.again-item-name').textContent;
+    const otherId = other.getAttribute('data-model-id');
+
+    dispatch(other, makeEvent('click'));
+    assert.equal(page.byId('regenerateMenu').hidden, true, 'choosing closes the menu');
+    await waitFor('the replacement reply', () => finished(thread), 30_000);
+
+    assert.equal(thread.querySelectorAll('.msg-assistant').length, 1, 'Again replaces, it does not append');
+    assert.equal(
+      thread.querySelector('.msg-assistant').querySelector('.msg-role').textContent,
+      otherName,
+      'the new reply is attributed to the model that was picked',
+    );
+
+    // The route writes the model onto the chat, so the rail must not be left
+    // naming a model this chat is no longer on.
+    const active = page.byId('modelList').querySelector('.model.is-active');
+    assert.equal(active.querySelector('.model-name').textContent, otherName, 'the rail follows');
+
+    const { chat } = await (await fetch(`${page.base}/api/chats/${chatId}`)).json();
+    assert.equal(chat.modelId, otherId, 'and so does what is on disk');
+    assert.equal(chat.messages.at(-1).modelId, otherId);
+  } finally {
+    await page.close();
+  }
+});
+
+test('Escape closes the Again menu without aborting anything', async () => {
+  const page = await mount({ script: SCRIPTED, delayMs: 4, chunkSize: 8 });
+  try {
+    page.submit('a question');
+    await waitFor('the reply', () => finished(page.byId('thread')), 30_000);
+
+    const menu = page.byId('regenerateMenu');
+    dispatch(page.byId('regenerateWith'), makeEvent('click'));
+    assert.equal(menu.hidden, false);
+
+    dispatch(menu, makeEvent('keydown', { key: 'Escape' }));
+    assert.equal(menu.hidden, true, 'Escape closes it');
+    assert.equal(page.byId('regenerateWith').getAttribute('aria-expanded'), 'false');
+    assert.equal(page.byId('statusBar').hidden, true, 'and nothing was generating to abort');
+  } finally {
+    await page.close();
+  }
+});
+
+test('the Again caret dies with the Again button, and closes any open menu', async () => {
+  const page = await mount({ script: SCRIPTED, delayMs: 60, chunkSize: 2 });
+  try {
+    // Nothing to regenerate yet.
+    assert.equal(page.byId('regenerate').disabled, true);
+    assert.equal(page.byId('regenerateWith').disabled, true, 'the second door must be shut too');
+
+    page.submit('a question');
+    await waitFor('the reply', () => finished(page.byId('thread')), 30_000);
+    assert.equal(page.byId('regenerateWith').disabled, false);
+
+    dispatch(page.byId('regenerateWith'), makeEvent('click'));
+    assert.equal(page.byId('regenerateMenu').hidden, false);
+
+    // Start another turn: Again is disabled while busy, so the open menu must go.
+    page.submit('another question');
+    await waitFor('the busy state', () => page.byId('statusBar').hidden === false);
+    assert.equal(page.byId('regenerateWith').disabled, true, 'no retrying mid-generation');
+    assert.equal(
+      page.byId('regenerateMenu').hidden,
+      true,
+      'a menu left open over a streaming reply would still fire',
+    );
+    await waitFor('it to finish', () => finished(page.byId('thread')), 30_000);
+  } finally {
+    await page.close();
+  }
+});

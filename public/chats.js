@@ -9,9 +9,9 @@
  */
 
 import { apiFetch } from './api-client.js';
-import { busyBlocks, clearNotice, currentModel, els, notify, state } from './dom.js';
+import { busyBlocks, clearNotice, currentModel, els, modelById, notify, state } from './dom.js';
 import { renderContext, renderThread, updateChatActions } from './message-view.js';
-import { renderModels } from './models.js';
+import { markModelSelected, renderModels } from './models.js';
 import { saveSystemPrompt, systemPromptText } from './prompts.js';
 import { loadChats, renderChats } from './sidebar.js';
 import { streamReply } from './stream.js';
@@ -97,7 +97,7 @@ async function deleteChat(id) {
  * neither — leaving the old node on screen while the server replaced the record
  * is how a thread starts disagreeing with what is on disk.
  */
-async function regenerateReply() {
+async function regenerateReply(modelId = null) {
   if (busyBlocks('Regenerating')) return;
   if (!state.chatId) return;
   const last = [...els.thread.querySelectorAll('.msg-assistant')].pop();
@@ -105,7 +105,18 @@ async function regenerateReply() {
     notify('There is no reply to regenerate yet.');
     return;
   }
-  const model = currentModel();
+  // Retrying with a different model is a real switch, not a one-off override:
+  // the regenerate route writes the model onto the chat, so the rail has to
+  // follow or it sits there naming a model this chat is no longer on. Done
+  // BEFORE the request so the pending reply is labelled with what is answering
+  // it, and skipped when the id is unknown rather than blanking the selection.
+  const chosen = modelId ? modelById(modelId) : currentModel();
+  if (!chosen) {
+    notify('That model is not one this build ships.');
+    return;
+  }
+  if (chosen.id !== state.modelId) markModelSelected(chosen.id);
+  const model = chosen;
   state.busy = true;
   els.thread.removeChild(last);
   await saveSystemPrompt();

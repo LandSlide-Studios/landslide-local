@@ -56,6 +56,8 @@ export function mountDom() {
   contextMeter: $('contextMeter'),
   exportChat: $('exportChat'),
   regenerate: $('regenerate'),
+  regenerateWith: $('regenerateWith'),
+  regenerateMenu: $('regenerateMenu'),
   tpl: $('tpl-message'),
   });
 

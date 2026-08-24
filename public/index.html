@@ -104,7 +104,17 @@
           </div>
           <div class="composer-actions">
             <a id="exportChat" class="btn btn-sm" download title="Download this chat as markdown">Export</a>
-            <button id="regenerate" class="btn btn-sm" type="button" title="Replace the last reply with a new one">Again</button>
+            <!-- Again, and Again-with-something-else. A native <select> would
+                 have been less code and is not usable here: arrowing a closed
+                 select fires change per option in Chrome, and every one of
+                 those would replace the reply. -->
+            <div class="again">
+              <button id="regenerate" class="btn btn-sm btn-split-main" type="button" title="Replace the last reply with a new one">Again</button>
+              <button id="regenerateWith" class="btn btn-sm btn-split-more" type="button"
+                aria-haspopup="menu" aria-expanded="false" aria-controls="regenerateMenu"
+                title="Replace the last reply using a different model"><span class="sr-only">Retry with a different model</span></button>
+              <div id="regenerateMenu" class="again-menu" role="menu" aria-label="Retry with a different model" hidden></div>
+            </div>
             <button id="send" class="btn btn-accent" type="submit">Send</button>
           </div>
         </div>

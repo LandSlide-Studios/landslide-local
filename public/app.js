@@ -29,6 +29,8 @@
 import { apiFetch } from './api-client.js';
 import { newChat, regenerateReply, startNewChat } from './chats.js';
 import { clearNotice, currentModel, els, mountDom, notify, state } from './dom.js';
+import { initAgainMenu } from './again-menu.js';
+import { initPreload } from './preload.js';
 import { buildMessage, updateChatActions } from './message-view.js';
 import {
   moveModelSelection,
@@ -189,6 +191,11 @@ function wireEvents() {
   els.savePrompt.addEventListener('click', () => savePrompt());
   els.deletePrompt.addEventListener('click', () => deletePrompt());
   els.regenerate.addEventListener('click', () => regenerateReply());
+  initAgainMenu((modelId) => regenerateReply(modelId));
+  // Preloading finishes by refreshing the runtime view, which redraws the
+  // rail. Handed in here rather than imported so preload.js never has to
+  // import the rail it redraws.
+  initPreload({ onSettled: refreshRuntime });
 
   els.startRuntime.addEventListener('click', () => startRuntime());
   setInterval(() => {
