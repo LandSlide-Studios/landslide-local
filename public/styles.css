@@ -475,11 +475,19 @@ button, input, textarea { font-family: inherit; font-size: inherit; color: inher
 /* A model name we inferred rather than recorded. Dimmed and dotted so it does
    not sit in the same visual register as a name we actually know; the tooltip
    says which. */
-/* text-decoration, not border-bottom: the role cell is full-width with its text
+/* A model name inferred rather than recorded.
+
+   The signal is the dotted underline and nothing else. Dimming it was the first
+   attempt and it was wrong twice over: 0.55 opacity on --rubble composites to
+   1.97:1 against the page, well under the 3:1 large-text floor — and every
+   reply written before this field existed takes this branch, so on any chat
+   that predates it the dimming applied to the entire history rather than to the
+   odd exception.
+
+   text-decoration, not border-bottom: the role cell is full-width with its text
    right-aligned, so a border draws a rule clear across the column instead of
    marking the word. */
 .msg-role.is-inferred {
-  opacity: 0.55;
   text-decoration: underline dotted;
   text-underline-offset: 3px;
   cursor: help;

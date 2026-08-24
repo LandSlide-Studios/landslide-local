@@ -486,6 +486,7 @@ async function mount({ script, delayMs = 0, chunkSize = 4 } = {}) {
   return {
     app,
     base,
+    dir,
     document,
     byId,
     /** Type into the composer and submit it, exactly as pressing Send does. */
@@ -764,4 +765,112 @@ test('[hidden] keeps its authority in the stylesheet', async () => {
   assert.match(rule[1], /display\s*:\s*none/, '[hidden] must hide');
   assert.match(rule[1], /!important/, 'without !important a display:flex class wins and the element stays on screen');
   assert.match(css, /\.status-bar\s*\{[^}]*display\s*:\s*flex/, 'the status bar is still the display:flex element that exposed this');
+});
+
+/* ------------------------------------------------------------------ */
+/* Attribution — the label under a reply names the model that wrote it */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Issue #1, at the only layer where it was ever visible.
+ *
+ * The store-side tests pin that a reply keeps its own modelId. They passed
+ * against a frontend that read the RAIL instead, which is the whole defect —
+ * so this drives the real page and reads the real label.
+ */
+test('a reply keeps the name of the model that wrote it after switching models', async () => {
+  const page = await mount({ script: SCRIPTED, delayMs: 4, chunkSize: 8 });
+  try {
+    const thread = page.byId('thread');
+    const cards = page.byId('modelList').querySelectorAll('.model');
+    assert.ok(cards.length >= 2, 'this test needs at least two models to switch between');
+
+    const nameOf = (card) => card.querySelector('.model-name').textContent;
+    const firstModel = nameOf(cards[0]);
+    const otherCard = [...cards].find((c) => nameOf(c) !== firstModel);
+    const otherModel = nameOf(otherCard);
+
+    page.submit('asked of the first model');
+    await waitFor('the first reply', () => finished(thread), 30_000);
+    assert.equal(
+      thread.querySelectorAll('.msg-assistant')[0].querySelector('.msg-role').textContent,
+      firstModel,
+      'the streaming label names the model actually being used',
+    );
+
+    // Switch the rail, then ask again. Same door the user uses.
+    dispatch(otherCard, makeEvent('click'));
+    page.submit('asked of the second model');
+    await waitFor('the second reply', () => thread.querySelectorAll('.msg-assistant').length === 2 && finished(thread), 30_000);
+
+    // Reopening rebuilds every node from disk — the exact path that used to
+    // relabel the whole history with whatever was selected.
+    const before = thread.querySelector('.msg-assistant');
+    dispatch(page.byId('chatList').querySelector('.chat-row'), makeEvent('click'));
+    await waitFor('the thread to be rebuilt from disk', () => {
+      const now = thread.querySelector('.msg-assistant');
+      return now && now !== before ? now : false;
+    });
+
+    const labels = [...thread.querySelectorAll('.msg-assistant')].map(
+      (m) => m.querySelector('.msg-role').textContent,
+    );
+    assert.deepEqual(
+      labels,
+      [firstModel, otherModel],
+      `after a reload each reply must still name its own model; got ${labels.join(', ')}`,
+    );
+    assert.equal(
+      [...thread.querySelectorAll('.msg-assistant')].some((m) =>
+        m.querySelector('.msg-role').className.includes('is-inferred'),
+      ),
+      false,
+      'a reply that recorded its model is not a guess and must not be marked as one',
+    );
+  } finally {
+    await page.close();
+  }
+});
+
+test('a reply written before models were recorded is shown as a guess, not as a fact', async () => {
+  const page = await mount({ script: SCRIPTED, delayMs: 4, chunkSize: 8 });
+  try {
+    const thread = page.byId('thread');
+    page.submit('a first question so a chat exists');
+    await waitFor('the reply', () => finished(thread), 30_000);
+
+    // Plant a reply the way every message on disk looked before this field
+    // existed: no modelId at all.
+    const { chats } = await (await fetch(`${page.base}/api/chats`)).json();
+    const file = path.join(page.dir, `${chats[0].id}.json`);
+    const raw = JSON.parse(await fs.readFile(file, 'utf8'));
+    raw.messages.push({
+      id: 'legacy00000000000001',
+      role: 'assistant',
+      content: 'written before attribution existed',
+      thinking: '',
+      createdAt: new Date().toISOString(),
+      stats: null,
+    });
+    await fs.writeFile(file, JSON.stringify(raw, null, 2));
+
+    const before = thread.querySelector('.msg-assistant');
+    dispatch(page.byId('chatList').querySelector('.chat-row'), makeEvent('click'));
+    await waitFor('the thread to be rebuilt from disk', () => {
+      const now = thread.querySelector('.msg-assistant');
+      return now && now !== before ? now : false;
+    });
+
+    const roles = [...thread.querySelectorAll('.msg-assistant')].map((m) => m.querySelector('.msg-role'));
+    assert.equal(roles.length, 2);
+    assert.equal(roles[0].className.includes('is-inferred'), false, 'the stamped reply is known');
+    assert.equal(roles[1].className.includes('is-inferred'), true, 'the unstamped one must be marked as inferred');
+    assert.match(
+      roles[1].getAttribute('aria-label') ?? '',
+      /never saved/,
+      'the caveat must reach the accessible name, not only a mouse-only title',
+    );
+  } finally {
+    await page.close();
+  }
 });

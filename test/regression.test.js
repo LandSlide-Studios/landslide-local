@@ -493,37 +493,6 @@ test('the warm endpoint refuses a model that is not in the catalog', async () =>
  * message has to carry its own.
  */
 
-test('Q3: appendMessage persists the model that produced the reply', async () => {
-  for (const make of [createJsonFileStore, createMemoryStore]) {
-    const dir = await tmpDir();
-    const store = make === createMemoryStore ? make() : make(dir);
-    const chat = await store.create({ title: 'attribution' });
-
-    await store.appendMessage(chat.id, { role: 'user', content: 'hello' });
-    await store.appendMessage(chat.id, { role: 'assistant', content: 'hi', modelId: 'deckard-4b' });
-
-    const read = await store.get(chat.id);
-    assert.equal(read.messages[0].modelId, null, 'a user turn has no model');
-    assert.equal(read.messages[1].modelId, 'deckard-4b', `${make.name}: the reply must carry its model`);
-    await fs.rm(dir, { recursive: true, force: true });
-  }
-});
-
-test('Q3: a message written without a model reads back as null, not as a guess', async () => {
-  const dir = await tmpDir();
-  const store = createJsonFileStore(dir);
-  const chat = await store.create({ title: 'old', modelId: 'cold-fusion-9b' });
-  await store.appendMessage(chat.id, { role: 'assistant', content: 'from before' });
-
-  const read = await store.get(chat.id);
-  assert.equal(
-    read.messages[0].modelId,
-    null,
-    'the store must not backfill from the chat: it does not know, and saying so is the point',
-  );
-  await fs.rm(dir, { recursive: true, force: true });
-});
-
 test('Q3: switching models mid-chat leaves earlier replies attributed correctly', async () => {
   const dir = await tmpDir();
   const api = createApi({
@@ -563,4 +532,46 @@ test('Q3: switching models mid-chat leaves earlier replies attributed correctly'
   server.closeAllConnections();
   await new Promise((r) => server.close(r));
   await fs.rm(dir, { recursive: true, force: true });
+});
+
+/**
+ * The export is the copy that leaves this machine. It read `chat.modelId` for
+ * every reply, so a file exported after a model switch reattributed the whole
+ * history — the same defect as the on-screen label, in the more durable artifact.
+ */
+test('Q3: the markdown export attributes each reply to the model that wrote it', async () => {
+  const { toMarkdown } = await import('../src/core/chat-export.js');
+  const md = toMarkdown({
+    title: 'attribution',
+    modelId: 'auto-variable-2b', // the chat has since been switched to a third model
+    createdAt: '2026-08-24T00:00:00.000Z',
+    messages: [
+      { role: 'user', content: 'first' },
+      { role: 'assistant', content: 'from cold fusion', modelId: 'cold-fusion-9b' },
+      { role: 'user', content: 'second' },
+      { role: 'assistant', content: 'from deckard', modelId: 'deckard-4b' },
+    ],
+  });
+
+  const headings = md.split('\n').filter((l) => l.startsWith('## '));
+  assert.deepEqual(headings, ['## You', '## cold-fusion-9b', '## You', '## deckard-4b']);
+  assert.ok(
+    !md.includes('## auto-variable-2b'),
+    "the chat's current model must not be stamped on replies it never wrote",
+  );
+  assert.ok(!md.includes('predate'), 'nothing was inferred here, so nothing should be caveated');
+});
+
+test('Q3: an export containing unstamped replies says so once, not per heading', async () => {
+  const { toMarkdown } = await import('../src/core/chat-export.js');
+  const md = toMarkdown({
+    title: 'legacy',
+    modelId: 'deckard-4b',
+    messages: [
+      { role: 'user', content: 'q' },
+      { role: 'assistant', content: 'written before the field existed' },
+    ],
+  });
+  assert.equal(md.split('predate').length - 1, 1, 'the caveat belongs in the metadata line, once');
+  assert.ok(md.includes('## deckard-4b'), "the chat's model is still the best guess available");
 });

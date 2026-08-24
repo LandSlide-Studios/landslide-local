@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createJsonFileStore, createMemoryStore, newId } from '../src/core/chat-store.js';
+import { createEncryptedFileStore, createJsonFileStore, createMemoryStore, newId } from '../src/core/chat-store.js';
 
 /**
  * One contract suite, run against both adapters. If an adapter drifts from the
@@ -22,6 +22,20 @@ const adapters = [
       };
     },
   ],
+  // The encrypted codec is a third live implementation of the same interface
+  // and was the one adapter no contract test ran against, so every behaviour
+  // pinned here was pinned for two of the three things that have to satisfy it.
+  [
+    'encrypted',
+    async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ls-chats-enc-'));
+      return {
+        store: createEncryptedFileStore(dir, { passphrase: 'contract-suite-passphrase' }),
+        dir,
+        cleanup: () => fs.rm(dir, { recursive: true, force: true }),
+      };
+    },
+  ],
 ];
 
 for (const [label, make] of adapters) {
@@ -32,6 +46,34 @@ for (const [label, make] of adapters) {
     assert.equal(chat.title, 'New chat');
     assert.equal(chat.modelId, 'cold-fusion-9b');
     assert.deepEqual(chat.messages, []);
+    await cleanup();
+  });
+
+  test(`[${label}] a reply carries the model that wrote it, a user turn carries none`, async () => {
+    const { store, cleanup } = await make();
+    const { id } = await store.create({ modelId: 'cold-fusion-9b' });
+
+    await store.appendMessage(id, { role: 'user', content: 'ask' });
+    await store.appendMessage(id, { role: 'assistant', content: 'answer', modelId: 'deckard-4b' });
+    // Written the way everything was before the field existed.
+    await store.appendMessage(id, { role: 'assistant', content: 'older answer' });
+
+    const read = await store.get(id);
+    assert.equal(read.messages[0].modelId, null, 'a user turn has no author model');
+    assert.equal(read.messages[1].modelId, 'deckard-4b', 'the reply keeps its own model');
+    assert.equal(
+      read.messages[2].modelId,
+      null,
+      'and an unstamped reply stays null rather than being backfilled from the chat, ' +
+        'which is the whole point: the store does not know, and guessing is what broke this',
+    );
+
+    // The chat's own model is a different thing and moves independently.
+    await store.updateChat(id, { modelId: 'auto-variable-2b' });
+    const after = await store.get(id);
+    assert.equal(after.modelId, 'auto-variable-2b');
+    assert.equal(after.messages[1].modelId, 'deckard-4b', 'switching the chat must not rewrite authorship');
+
     await cleanup();
   });
 

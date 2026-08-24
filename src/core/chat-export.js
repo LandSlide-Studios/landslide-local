@@ -32,17 +32,31 @@ export function exportChat(chat, format = 'md') {
 export function toMarkdown(chat) {
   const out = [`# ${chat?.title ?? 'Chat'}`, ''];
 
+  const messages = chat?.messages ?? [];
+  // Replies written before they recorded their own model fall back to the
+  // chat's, which is a guess. Said once here rather than hung off every
+  // heading: on a chat that predates the field, every heading would carry it.
+  const anyInferred = messages.some((m) => m.role !== 'user' && !m.modelId);
+
   const meta = [];
   if (chat?.modelId) meta.push(`model: ${chat.modelId}`);
   if (chat?.createdAt) meta.push(`started: ${chat.createdAt}`);
+  if (anyInferred && chat?.modelId) {
+    meta.push('some replies predate per-reply model tracking and are shown under this chat\'s model');
+  }
   if (meta.length) out.push(`_${meta.join(' · ')}_`, '');
 
   if (chat?.systemPrompt) {
     out.push('## System prompt', '', fence(chat.systemPrompt), '');
   }
 
-  for (const m of chat?.messages ?? []) {
-    out.push(`## ${m.role === 'user' ? 'You' : (chat.modelId ?? 'Model')}`, '');
+  for (const m of messages) {
+    // The reply's OWN model, same as the page. Reading chat.modelId here meant
+    // the exported file — the copy that leaves this machine and outlives the
+    // app — reattributed every earlier reply to whatever model the chat had
+    // last been switched to.
+    const author = m.role === 'user' ? 'You' : (m.modelId ?? chat?.modelId ?? 'Model');
+    out.push(`## ${author}`, '');
     if (m.thinking) {
       // A reasoning trace is context, not the answer, and it is routinely
       // longer than the answer it produced. Collapsed keeps the export

@@ -60,12 +60,25 @@ function labelMessage(roleEl, modelId, chatModelId) {
     roleEl.textContent = known?.name ?? modelId;
     return known?.format;
   }
-  const inferred = modelById(chatModelId) ?? currentModel();
-  roleEl.textContent = inferred?.name ?? 'Model';
+  // Deliberately NOT `?? currentModel()`. Borrowing the rail's selection here
+  // reinstates the exact bug this function exists to remove — retire an id from
+  // models.json, or restore a backup taken under a different catalog, and every
+  // legacy reply would be labelled AND re-rendered from whatever is highlighted
+  // at the time. With nothing to fall back to, the honest answer is "Model".
+  if (!chatModelId) {
+    roleEl.textContent = 'Model';
+    return undefined;
+  }
+  const inferred = modelById(chatModelId);
+  roleEl.textContent = inferred?.name ?? chatModelId;
   roleEl.classList.add('is-inferred');
-  roleEl.title =
+  const caveat =
     "This chat's model. This reply was written before replies recorded their own " +
     'model, so which one actually produced it was never saved.';
+  roleEl.title = caveat;
+  // `title` alone reaches a mouse and nothing else. The accessible name carries
+  // the same caveat so it is not mouse-only.
+  roleEl.setAttribute('aria-label', `${roleEl.textContent} — ${caveat}`);
   return inferred?.format;
 }
 
