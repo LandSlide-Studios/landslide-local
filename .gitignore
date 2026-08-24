@@ -6,3 +6,4 @@ logs/
 .demo-chats/
 .download.log
 backups/
+.check-chats/
