@@ -25,12 +25,22 @@ const LOCK = path.join(ROOT, 'test', 'acceptance.lock.json');
 const mode = process.argv.find((a) => a.startsWith('--')) ?? '--verify';
 
 const files = await listAcceptance();
-const current = {};
-for (const f of files) {
-  current[f] = createHash('sha256')
-    .update(await fs.readFile(path.join(DIR, f)))
-    .digest('hex');
+/**
+ * Hash the NORMALISED text, not the raw bytes.
+ *
+ * git rewrites line endings on checkout, so a byte hash taken in one working
+ * tree reports every file as MODIFIED in a fresh worktree on the same commit.
+ * A tamper alarm that fires on a clean checkout is an alarm people learn to
+ * ignore, which costs more than the thing it was guarding. Line endings cannot
+ * change what a test asserts; the content can, and that is what is hashed.
+ */
+async function hashOf(file) {
+  const text = await fs.readFile(path.join(DIR, file), 'utf8');
+  return createHash('sha256').update(text.split(String.fromCharCode(13)).join('')).digest('hex');
 }
+
+const current = {};
+for (const f of files) current[f] = await hashOf(f);
 
 if (mode === '--write') {
   if (files.length === 0) {
