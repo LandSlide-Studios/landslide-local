@@ -170,7 +170,7 @@ Tommy's call, per change set.
 
 | # | Item | Status | Branch | Done when |
 |---|------|--------|--------|-----------|
-| Q3 | Per-message model label; close issue #1 | todo | - | a reply stores the model that produced it and still reads correctly after a reload; switching models mid-chat labels each reply with its own model; a message predating this shows the chat's model, visibly dimmed and marked as inferred |
+| Q3 | Per-message model label; close issue #1 and #2 | done | loop/q3-message-model | a reply stores the model that produced it and still reads correctly after a reload; switching models mid-chat labels each reply with its own model; a message predating this shows the chat's model, visibly dimmed and marked as inferred |
 | Q1 | Retry with a different model | todo | - | choosing a model from the Again control regenerates with it; the chat's stored modelId follows; the rail's selection follows; the picker is keyboard reachable and inert while busy |
 | Q2 | Branch from message N | todo | - | branching at N yields a new chat of exactly N+1 identical messages carrying modelId/systemPrompt/options; the parent is byte-identical afterwards; unknown messageId is 400; the store contract suite passes against both implementations |
 | Q5 | Resident-VRAM panel with Unload | todo | - | resident models are listed with VRAM; Unload drops the count in `/api/ps`; a resident model absent from the catalog is shown but cannot be unloaded; the panel adds no sidebar height when nothing is resident, measured at a 900px viewport |
