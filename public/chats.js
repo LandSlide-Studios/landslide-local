@@ -65,6 +65,10 @@ async function openChat(id) {
   // chat's steering into an old conversation would silently change what it is.
   state.savedSystemPrompt = typeof chat.systemPrompt === 'string' ? chat.systemPrompt : '';
   els.systemPrompt.value = state.savedSystemPrompt;
+  // Steering that is in force must not be hidden from the person it steers.
+  // Opening it is one-way on purpose: closing the fold is the user's choice and
+  // switching to a chat with no prompt should not undo it.
+  if (state.savedSystemPrompt) els.systemPromptFold.open = true;
   // The meter reports the last turn that was actually sent, and no turn has
   // been sent in this chat yet this session.
   renderContext(null);

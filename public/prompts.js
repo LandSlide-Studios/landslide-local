@@ -100,6 +100,7 @@ function usePrompt() {
   const found = state.prompts.find((p) => p.id === els.promptLibrary.value);
   if (!found) return;
   els.systemPrompt.value = found.text;
+  els.systemPromptFold.open = true;
   els.promptName.value = found.name;
   saveSystemPrompt();
 }

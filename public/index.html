@@ -52,18 +52,27 @@
          direction these models are documented as bland. The API always took a
          system prompt; until now there was nowhere to type one. -->
     <section class="panel">
-      <h2 class="panel-title">System prompt</h2>
-      <textarea id="systemPrompt" class="system-prompt" rows="3"
-        placeholder="Tell it who to be. Blank means no steering."
-        aria-label="System prompt for this chat"></textarea>
-      <div class="prompt-lib">
-        <select id="promptLibrary" class="search" aria-label="Saved prompts"></select>
-        <div class="prompt-lib-row">
-          <input id="promptName" class="search" type="text" placeholder="Save as" aria-label="Name for this prompt" />
-          <button id="savePrompt" class="btn btn-sm" type="button">Save</button>
-          <button id="deletePrompt" class="btn btn-sm" type="button" title="Delete the selected saved prompt">Del</button>
+      <!-- Folded away by default. It is the tallest section in the column and
+           the one touched least often, and the column did not fit: at a 900px
+           viewport the chat list below it started 47px BELOW the bottom of the
+           window. A chat that has a system prompt saved opens this itself, so
+           steering is never hidden from the person it is steering. -->
+      <details id="systemPromptFold" class="fold">
+        <summary class="panel-title fold-summary">System prompt</summary>
+        <div class="fold-body">
+          <textarea id="systemPrompt" class="system-prompt" rows="3"
+            placeholder="Tell it who to be. Blank means no steering."
+            aria-label="System prompt for this chat"></textarea>
+          <div class="prompt-lib">
+            <select id="promptLibrary" class="search" aria-label="Saved prompts"></select>
+            <div class="prompt-lib-row">
+              <input id="promptName" class="search" type="text" placeholder="Save as" aria-label="Name for this prompt" />
+              <button id="savePrompt" class="btn btn-sm" type="button">Save</button>
+              <button id="deletePrompt" class="btn btn-sm" type="button" title="Delete the selected saved prompt">Del</button>
+            </div>
+          </div>
         </div>
-      </div>
+      </details>
     </section>
 
     <section class="panel panel-grow">

@@ -97,9 +97,25 @@ button, input, textarea { font-family: inherit; font-size: inherit; color: inher
 .sidebar > .side-foot {
   flex: none;
 }
+/* One scroller in this column, and it is the sidebar itself.
+   The chats panel keeps its natural height and the whole column scrolls past
+   it. That is not the prettiest answer and it is the honest one: at a 900px
+   viewport the fixed content above this panel is already 824px, of which the
+   model rail alone is 556px. There is no distribution of the remaining 76px
+   that produces a usable chat list, so anything that tries is really just
+   choosing which thing to squeeze into a sliver.
+   Two cleverer versions were tried first and both were worse. A floor on this
+   panel is shared with the heading and search box, so the list got the
+   remainder - 35px, then 147px. A floor on the list with a shrinkable panel
+   overflowed instead, and the list drew straight through the footer. */
 .sidebar > .panel-grow {
   flex: 1 1 auto;
-  min-height: 120px;
+  /* auto, not 0. `min-height: 0` is the standard let-a-flex-item-shrink fix and
+     it is wrong here: this panel has no inner scroller to absorb the squeeze, so
+     shrinking it below its own content does not make it smaller, it makes it
+     overflow - and the list drew straight through the footer. Growing into
+     spare room on a tall window is all this rule is for. */
+  min-height: auto;
 }
 
 .brand { display: flex; align-items: center; gap: 12px; }
@@ -204,6 +220,32 @@ button, input, textarea { font-family: inherit; font-size: inherit; color: inher
 .panel { display: flex; flex-direction: column; gap: 9px; min-height: 0; }
 .panel-grow { flex: 1; min-height: 0; }
 .panel-head { display: flex; align-items: center; justify-content: space-between; }
+
+/* A native <details>, so the fold is keyboard-reachable and needs no script. */
+.fold { display: flex; flex-direction: column; gap: 9px; }
+.fold-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+.fold-summary::-webkit-details-marker { display: none; }
+.fold-summary::before {
+  content: '';
+  flex: none;
+  width: 0;
+  height: 0;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-left: 5px solid currentColor;
+  transition: transform 90ms steps(2);
+}
+.fold[open] > .fold-summary::before { transform: rotate(90deg); }
+.fold-summary:hover { color: rgba(237, 233, 225, 0.85); }
+.fold-summary:focus-visible { outline: 2px solid var(--cream); outline-offset: 3px; }
+.fold-body { display: flex; flex-direction: column; gap: 9px; padding-top: 9px; }
 
 .panel-title {
   margin: 0;
@@ -423,14 +465,21 @@ button, input, textarea { font-family: inherit; font-size: inherit; color: inher
 .search::placeholder { color: rgba(237, 233, 225, 0.40); }
 .search:focus { outline: none; border-color: var(--accent); }
 
+/* The list scrolls inside its own pane, and the pane has a floor.
+   Nesting a scroller inside the scrolling sidebar was never the bug. The bug
+   was its SIZE: at a 900px viewport it collapsed to 35px, and a 35px scroller
+   under the pointer swallows the wheel - so scrolling over the chats moved
+   nothing at all. `.panel-grow`'s min-height is what keeps this a usable pane
+   rather than a sliver; without it, removing this scroller is the only way to
+   stay honest. */
+/* No scroller of its own. Nested inside the scrolling sidebar this collapsed to
+   35px on a 900px viewport, and a 35px scroller under the pointer swallows the
+   wheel - which is why scrolling over the chat list moved nothing at all and
+   the chats below the fold could not be reached. */
 .chat-list {
   display: flex; flex-direction: column; gap: 5px;
-  overflow-y: auto;
-  min-height: 0;
   padding-right: 2px;
 }
-.chat-list::-webkit-scrollbar { width: 8px; }
-.chat-list::-webkit-scrollbar-thumb { background: rgba(237, 233, 225, 0.22); border-radius: var(--r); }
 
 .chat-row {
   display: flex; align-items: center; gap: 6px;

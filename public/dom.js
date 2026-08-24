@@ -50,6 +50,7 @@ export function mountDom() {
   noticeMsg: $('noticeMsg'),
   noticeDismiss: $('noticeDismiss'),
   systemPrompt: $('systemPrompt'),
+  systemPromptFold: $('systemPromptFold'),
   promptLibrary: $('promptLibrary'),
   promptName: $('promptName'),
   savePrompt: $('savePrompt'),

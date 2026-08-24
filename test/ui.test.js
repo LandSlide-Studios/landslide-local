@@ -1717,3 +1717,58 @@ test('the VRAM panel opens collapsed for every page, not just the first one of t
     await stub.close();
   }
 });
+
+/* ------------------------------------------------------------------ */
+/* The sidebar column                                                  */
+/* ------------------------------------------------------------------ */
+
+test('the system prompt is folded away by default, and opens itself when a chat has one', async () => {
+  const page = await mount({ script: SCRIPTED, delayMs: 4, chunkSize: 8 });
+  try {
+    const fold = page.byId('systemPromptFold');
+    assert.equal(fold.tagName, 'DETAILS', 'a native disclosure, so the fold needs no script to be reachable');
+    assert.equal(fold.open, false, 'closed by default: it is the tallest section and the least used');
+
+    // Steering that is in force must never be hidden from the person it steers.
+    page.byId('systemPrompt').value = 'You are terse.';
+    dispatch(page.byId('systemPrompt'), makeEvent('change'));
+    page.submit('a question');
+    await waitFor('the reply', () => finished(page.byId('thread')), 30_000);
+
+    fold.open = false; // as if the user had folded it away again
+    dispatch(page.byId('chatList').querySelector('.chat-row'), makeEvent('click'));
+    await waitFor('the fold to open itself', () => fold.open === true, 30_000);
+    assert.equal(page.byId('systemPrompt').value, 'You are terse.');
+  } finally {
+    await page.close();
+  }
+});
+
+/**
+ * The two CSS rules below are asserted as TEXT, which is weaker than asserting
+ * a rendering and is the most this harness can do — it parses the page but has
+ * no layout engine, which is exactly why this bug shipped in the first place.
+ * They are here so the rules cannot be quietly reverted; the measurements that
+ * actually prove the fix were taken in a browser.
+ */
+test('the chat list has no scroller of its own', async () => {
+  const css = await fs.readFile(new URL('../public/styles.css', import.meta.url), 'utf8');
+  const rule = css.slice(css.indexOf('.chat-list {'), css.indexOf('}', css.indexOf('.chat-list {')));
+  assert.ok(
+    !/overflow-y:\s*auto/.test(rule),
+    'nested inside the scrolling sidebar this collapsed to 35px, and a 35px scroller under the ' +
+      'pointer swallows the wheel — scrolling over the chats moved nothing and they could not be reached',
+  );
+});
+
+test('the chats panel is not allowed to shrink below its own contents', async () => {
+  const css = await fs.readFile(new URL('../public/styles.css', import.meta.url), 'utf8');
+  const at = css.indexOf('.sidebar > .panel-grow {');
+  const rule = css.slice(at, css.indexOf('}', at));
+  assert.match(
+    rule,
+    /min-height:\s*auto/,
+    'min-height: 0 is the usual let-a-flex-item-shrink fix and is wrong here: with no inner ' +
+      'scroller to absorb it, shrinking below content overflows instead, and the list draws through the footer',
+  );
+});
