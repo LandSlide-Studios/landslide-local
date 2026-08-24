@@ -1,7 +1,11 @@
 /**
  * ChatStore — durable conversation storage.
  *
- * Interface (both adapters satisfy it exactly):
+ * Adapters: `json` (plain files), `encrypted` (the same files, sealed under a
+ * passphrase) and `memory`. All three satisfy the interface exactly; the two
+ * file-backed ones are literally the same function with a different codec.
+ *
+ * Interface:
  *   list()                        -> Promise<ChatMeta[]>   newest first
  *   get(id)                       -> Promise<Chat | null>
  *   create({ title, modelId })    -> Promise<Chat>
@@ -19,6 +23,11 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { createChatCrypto, ENVELOPE_OVERHEAD } from './chat-crypto.js';
+
+/** The two on-disk shapes. Nothing else in the chats folder is a chat. */
+export const JSON_EXT = '.json';
+export const ENC_EXT = '.enc';
 
 /**
  * Per-key promise chain. Two requests appending to the same chat would otherwise
@@ -51,8 +60,13 @@ export function newId() {
   return randomUUID().replace(/-/g, '').slice(0, 20);
 }
 
+/** Also the test a filename stem has to pass before it is treated as a chat. */
+export function isChatId(value) {
+  return typeof value === 'string' && ID_RE.test(value);
+}
+
 function assertId(id) {
-  if (typeof id !== 'string' || !ID_RE.test(id)) {
+  if (!isChatId(id)) {
     const err = new Error(`invalid chat id: ${String(id).slice(0, 40)}`);
     err.code = 'EINVALID_ID';
     throw err;
@@ -188,11 +202,25 @@ const byNewest = (a, b) =>
   a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : a.id < b.id ? 1 : a.id > b.id ? -1 : 0;
 
 /* ------------------------------------------------------------------ */
-/* JSON file adapter                                                   */
+/* File-backed adapters — one folder, one file per conversation        */
 /* ------------------------------------------------------------------ */
 
-export function createJsonFileStore(dir) {
-  const fileFor = (id) => path.join(dir, `${id}.json`);
+/**
+ * Everything both file adapters do, which is everything except turning a chat
+ * into bytes. Keeping this one function is the point: `createEncryptedFileStore`
+ * is not a second storage implementation that has to be kept in step, it is the
+ * same one with a different codec. A behaviour added here reaches both, which is
+ * what "both adapters satisfy the contract exactly" is supposed to mean.
+ *
+ * @param {string} dir
+ * @param {object} codec
+ * @param {string} codec.ext            file extension, including the dot
+ * @param {(chat: object) => Promise<Buffer>} codec.encode
+ * @param {(bytes: Buffer) => Promise<object>} codec.decode
+ * @param {(err: Error, id: string, quarantine: Function) => Promise<object|null>} codec.onDecodeError
+ */
+function createFileStore(dir, { ext, encode, decode, onDecodeError }) {
+  const fileFor = (id) => path.join(dir, `${id}${ext}`);
   const withLock = createSerializer();
   let ready = null;
 
@@ -203,11 +231,14 @@ export function createJsonFileStore(dir) {
 
   async function writeAtomic(chat) {
     await ensureDir();
+    // Encode before anything is opened: a codec that fails must leave no file
+    // behind at all, not an empty temp file for the next readdir to trip over.
+    const bytes = await encode(chat);
     const target = fileFor(chat.id);
     const tmp = `${target}.${process.pid}.${tmpCounter++}.tmp`;
     const handle = await fs.open(tmp, 'w');
     try {
-      await handle.writeFile(JSON.stringify(chat, null, 2), 'utf8');
+      await handle.writeFile(bytes);
       await handle.sync(); // rename is only atomic if the bytes are actually down
     } finally {
       await handle.close();
@@ -217,22 +248,28 @@ export function createJsonFileStore(dir) {
   }
 
   async function readOne(id) {
+    let raw;
     try {
-      const raw = await fs.readFile(fileFor(id), 'utf8');
-      const parsed = JSON.parse(raw);
-      if (!isWellFormed(parsed)) {
-        await quarantine(id);
-        return null;
-      }
-      return parsed;
+      raw = await fs.readFile(fileFor(id));
     } catch (err) {
       if (err.code === 'ENOENT') return null;
-      if (err instanceof SyntaxError) {
-        await quarantine(id);
-        return null;
-      }
       throw err;
     }
+    let parsed;
+    try {
+      parsed = await decode(raw);
+    } catch (err) {
+      // What unreadable bytes MEAN depends on the codec, so the codec decides.
+      // Plain JSON: a truncated file — quarantine it and keep the store usable.
+      // Encrypted: a wrong passphrase or a tampered file — and quietly skipping
+      // either one is exactly how an encrypted store presents as an empty one.
+      return onDecodeError(err, id, quarantine);
+    }
+    if (!isWellFormed(parsed)) {
+      await quarantine(id);
+      return null;
+    }
+    return parsed;
   }
 
   async function quarantine(id) {
@@ -251,7 +288,10 @@ export function createJsonFileStore(dir) {
     } catch {
       return [];
     }
-    const ids = names.filter((n) => n.endsWith('.json')).map((n) => n.slice(0, -5)).filter((n) => ID_RE.test(n));
+    const ids = names
+      .filter((n) => n.endsWith(ext))
+      .map((n) => n.slice(0, -ext.length))
+      .filter((n) => ID_RE.test(n));
     const chats = await Promise.all(ids.map((id) => readOne(id)));
     return chats.filter(Boolean);
   }
@@ -302,6 +342,102 @@ export function createJsonFileStore(dir) {
       return chats.filter((c) => matches(c, needle)).map(toMeta).sort(byNewest);
     },
   };
+}
+
+/** Plain JSON on disk. Readable with any text editor, and unprotected. */
+export function createJsonFileStore(dir) {
+  return createFileStore(dir, {
+    ext: JSON_EXT,
+    encode: async (chat) => Buffer.from(JSON.stringify(chat, null, 2), 'utf8'),
+    decode: async (bytes) => JSON.parse(bytes.toString('utf8')),
+    async onDecodeError(err, id, quarantine) {
+      // Only malformed JSON is a corrupt file. Anything else is a real fault
+      // and pretending it is a bad chat would hide it.
+      if (!(err instanceof SyntaxError)) throw err;
+      await quarantine(id);
+      return null;
+    },
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/* Encrypted file adapter (opt-in)                                      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The same store, with every file sealed under a passphrase. See chat-crypto.js
+ * for the envelope; the only thing this layer adds is which salt new files get.
+ *
+ * **There is no recovery path.** The passphrase is not stored anywhere, by
+ * design — a key kept beside the data it protects protects nothing. Forget it
+ * and the chats are gone.
+ *
+ * Two deliberate absences:
+ *
+ *   - No fallback to plaintext. A file that will not decrypt raises, and keeps
+ *     raising. An adapter that shrugged and read the plain copy instead would
+ *     turn an encrypted store into an unencrypted one at the first hiccup.
+ *   - No quarantine on a decryption failure. Under a mistyped passphrase EVERY
+ *     file fails, and renaming the entire history to `.corrupt` on a typo is a
+ *     worse outcome than the error the user came to see.
+ *
+ * @param {string} dir
+ * @param {{ passphrase: string }} options
+ */
+export function createEncryptedFileStore(dir, { passphrase } = {}) {
+  const box = createChatCrypto({ passphrase });
+  let saltReady = null;
+
+  /**
+   * One salt for the folder, adopted from whatever is already in it.
+   *
+   * Per-file salts would be more orthodox, and would also mean one ~60 ms scrypt
+   * per chat on every `list()`. Sharing the salt lets the key cache do its job.
+   * The salt is still written into every file, so the folder stays readable if
+   * any subset of it is copied elsewhere, and there is no separate key file
+   * whose loss would take the history with it.
+   */
+  function storeSalt() {
+    saltReady ??= (async () => {
+      let names = [];
+      try {
+        names = await fs.readdir(dir);
+      } catch {
+        /* a folder that does not exist yet simply has no salt to adopt */
+      }
+      for (const name of names.filter((n) => n.endsWith(ENC_EXT)).sort()) {
+        const head = await readEnvelopeHead(path.join(dir, name));
+        const salt = head && box.saltOf(head);
+        if (salt) return salt;
+      }
+      return box.newSalt();
+    })();
+    return saltReady;
+  }
+
+  return createFileStore(dir, {
+    ext: ENC_EXT,
+    encode: async (chat) => box.seal(JSON.stringify(chat), await storeSalt()),
+    decode: async (bytes) => JSON.parse(await box.open(bytes)),
+    onDecodeError(err) {
+      throw err;
+    },
+  });
+}
+
+/** Just the fixed-size head of an envelope — enough for the salt, no key needed. */
+async function readEnvelopeHead(file) {
+  let handle;
+  try {
+    handle = await fs.open(file, 'r');
+    const buf = Buffer.alloc(ENVELOPE_OVERHEAD);
+    const { bytesRead } = await handle.read(buf, 0, buf.length, 0);
+    return bytesRead === buf.length ? buf : null;
+  } catch {
+    return null;
+  } finally {
+    await handle?.close().catch(() => {});
+  }
 }
 
 /* ------------------------------------------------------------------ */

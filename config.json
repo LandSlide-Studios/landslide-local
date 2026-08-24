@@ -24,5 +24,9 @@
     "vramTotalGb": 8,
     "vramUsableGb": 6.65,
     "label": "RTX 5060 8GB"
+  },
+  "security": {
+    "token": "",
+    "encryptChats": false
   }
 }

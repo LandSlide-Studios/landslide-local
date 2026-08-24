@@ -133,6 +133,119 @@ it took, time to first token, token count and tokens per second.
 Chat files are plain JSON. Delete one and it is gone. Nothing is written anywhere else,
 and nothing leaves the machine.
 
+Two options exist for when plain JSON on a loopback port is not private enough for what
+you use this for. Both are off until you turn them on, and neither changes anything
+about the app while they are off.
+
+---
+
+## Encrypting the chats
+
+With this on, every chat file is AES-256-GCM ciphertext under a key derived from your
+passphrase with scrypt. The title, the message bodies and the model's reasoning are all
+inside it. The only thing legible from outside is the file name, which is a random id.
+
+**If you forget the passphrase, every chat is gone.** Not "gone until it is reset" —
+gone. This app never writes the passphrase down, deliberately: a key kept beside the
+data it protects is not protecting anything. There is no recovery mode, no hint, no
+second copy and nobody to ask. Write it down somewhere real before you turn this on.
+
+### Turning it on
+
+**1. Back up first.** `npm run backup`, and put the archive somewhere else.
+
+**2. Set the passphrase.**
+
+```
+setx LANDSLIDE_PASSPHRASE "the passphrase you just wrote down"
+```
+
+It comes from the environment and never from `config.json`. Config gets printed, logged
+and pasted into bug reports; a passphrase that lives in it will eventually end up
+somewhere you did not intend.
+
+**3. Move the chats you already have.**
+
+```
+npm run encrypt-chats            says what it would do, changes nothing
+npm run encrypt-chats -- --yes   does it
+```
+
+Each chat is encrypted, written, read back off the disk and compared against the
+original — and only then is the plain file removed. Nothing is deleted that has not
+been verified first. If it is interrupted half way through, run it again and it picks
+up where it stopped; a file it cannot parse, or one whose encrypted copy already exists
+with different content, is left exactly where it is and reported rather than guessed at.
+
+**4. Make a missing passphrase an error rather than a downgrade.**
+
+```json
+{ "security": { "encryptChats": true } }
+```
+
+That flag does not switch encryption on — the passphrase does. What it does is make the
+app refuse to start when the passphrase is missing, instead of opening the folder as
+plain files and quietly writing your next conversation into it in the clear.
+
+If you use the MCP server as well, it reads the same folder and needs
+`LANDSLIDE_PASSPHRASE` in its environment too. Without it, it reports an empty history
+rather than an error.
+
+### What it does not cover
+
+- **`logs\app.log`.** It records requests, timings and errors — not chat content — and
+  it stays plain text.
+- **Backups made before you switched.** Those archives are still plaintext.
+- **Plaintext that was already deleted.** `encrypt-chats` overwrites each old file
+  before unlinking it, which is worth doing and not worth believing in: an SSD may well
+  have written the new bytes to a different block and left the originals sitting in
+  flash, readable by anything that can address it directly.
+- **The running app.** While it is open, the passphrase and the decrypted chats are in
+  memory, and the browser has the decrypted text on screen.
+- **Going back.** There is no built-in migration from encrypted to plain. Copy anything
+  you want out of the app before you decide you are done with it.
+
+---
+
+## Locking the API to a token
+
+The server only ever answers on `127.0.0.1`, so anything reaching it is already running
+on this machine. A token draws a line inside that: the browser tab you opened gets in,
+and other software under your account does not — a script, an extension's helper,
+something scanning local ports for an open API.
+
+```json
+{ "security": { "token": "paste-a-long-random-string-here" } }
+```
+
+Or keep it out of the file entirely:
+
+```
+setx LANDSLIDE_TOKEN "paste-a-long-random-string-here"
+```
+
+Generate one with:
+
+```
+node -e "console.log(require('node:crypto').randomBytes(24).toString('base64url'))"
+```
+
+The `config.json` in this folder ships with `"token": ""`, which means off. It should
+never be committed with a real one in it.
+
+With a token set, every `/api/` request needs an `Authorization: Bearer <token>` header.
+The page itself still loads without one — it has to, or there would be nowhere to type
+the token — so the first API call comes back 401, the app asks you for the token, and
+remembers it in that browser from then on. If the answer is wrong it is discarded rather
+than left to fail every request afterwards. Comparison is constant-time, over digests,
+so a wrong token gives nothing away about the right one.
+
+**What it is not.** It is not a login, and it is not protection from somebody sitting at
+this keyboard — they can read `config.json`, or the browser's storage, in about ten
+seconds. It raises the bar for other software on the machine, and that is the entire
+claim being made for it. Against a person with physical access, the encryption above is
+what helps, and only while the app is shut.
+
 ---
 
 ## Reliability

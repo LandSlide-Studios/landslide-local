@@ -169,3 +169,56 @@ every `search()`. At 9 chats that is nothing. It is worth knowing that
 a loop, so the cost is no longer bounded by how fast a human can type into the
 Ctrl+K box. Not a problem yet, and not worth a cache until the store is large;
 recorded so the next person does not discover it as a surprise.
+
+## E16. There is no migration back from encrypted to plain files
+
+`src/core/store-migrate.js` exports `migrateToEncrypted` and nothing else, so
+turning encryption on is a one-way door. `npm run backup` does not help: it
+archives the folder byte for byte, so a backup of an encrypted folder restores as
+encrypted. The only way out today is to copy conversations out of the running app
+by hand.
+
+Left alone deliberately — I4 specified one direction and the acceptance suite
+pins one direction. The reverse is close to free given what is already there: the
+same encrypt/verify/delete skeleton with `open()` and `seal()` swapped, writing
+`<id>.json` and removing `<id>.enc`. The README says plainly that there is no way
+back rather than leaving it to be discovered. Worth its own small item.
+
+## E17. Encryption hides the contents of a chat, not the shape of the folder
+
+The envelope covers title, messages and reasoning. It cannot cover what the
+filesystem itself records, and the README lists this but it is worth stating once
+in the engineering notes too: the file name is the chat id, so **how many**
+conversations exist is visible, and each file's size and mtime say roughly how
+long a conversation is and when it was last touched. `logs\app.log` separately
+records request paths, which include those chat ids.
+
+None of that is a defect in the scheme — it is what file-per-record storage
+means, and hiding it needs a single-container store or padding, both of which
+cost more than they are worth at this scale. Recorded so nobody later reads "the
+chats are encrypted" as "the folder tells you nothing".
+
+## E18. Quarantined `.corrupt` files keep plaintext indefinitely
+
+`createFileStore`'s `quarantine()` renames an unreadable chat to
+`<id>.json.corrupt` and leaves it there forever. Nothing ever revisits those
+files, so a folder that has been running a while accumulates plaintext that
+survives `encrypt-chats` — which reports them under `leftBehind` and refuses to
+touch them, on the grounds that a file that already went wrong once is not one to
+delete on a script's judgement.
+
+The gap is that there is no second step. Something should eventually offer to
+show, re-import or remove them; today the only instruction is a warning line
+telling the user to deal with it by hand.
+
+## E19. `window.prompt` is not available in every browser this app will meet
+
+Not a repo finding so much as one worth writing down: the first cut of the token
+ask used `window.prompt`, and the browser it was tested in answered
+`prompt() is not supported`. Chrome refuses it in several embeddings and
+suppresses it after the first dialog in others — and because the ask fires on the
+app's very first request, the failure mode is the entire UI coming up empty with
+nothing said about why.
+
+It is now built out of DOM nodes in the existing notice bar. `alert` and
+`confirm` do not appear anywhere in `public/`, and should not start.

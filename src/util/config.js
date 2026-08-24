@@ -28,6 +28,14 @@ const DEFAULTS = {
     logMaxBytes: 2 * 1024 * 1024,
   },
   hardware: { vramTotalGb: 8, vramUsableGb: 6.65, label: 'local GPU' },
+  /**
+   * Both off unless asked for. `token` is the bearer token the API requires
+   * once it is non-empty; `encryptChats` only asserts that encryption is
+   * expected, so a missing passphrase is an error instead of a silent
+   * downgrade. The passphrase itself is never a config field — it comes from
+   * LANDSLIDE_PASSPHRASE. See core/store-open.js.
+   */
+  security: { token: '', encryptChats: false },
 };
 
 function deepMerge(base, extra) {
@@ -56,6 +64,10 @@ export function loadConfig({ file = path.join(ROOT, 'config.json'), env = proces
   if (env.LANDSLIDE_CHATS_DIR) cfg.storage.chatsDir = env.LANDSLIDE_CHATS_DIR;
   if (env.LANDSLIDE_MODELS_DIR) cfg.storage.modelsDir = env.LANDSLIDE_MODELS_DIR;
   if (env.LANDSLIDE_LOG_FILE) cfg.storage.logFile = env.LANDSLIDE_LOG_FILE;
+  // So the token can be kept out of config.json entirely if you would rather it
+  // not sit in a file. LANDSLIDE_PASSPHRASE has no equivalent line on purpose:
+  // it must never reach the config object at all.
+  if (env.LANDSLIDE_TOKEN) cfg.security.token = env.LANDSLIDE_TOKEN;
 
   cfg.storage.chatsDir = resolveFrom(ROOT, cfg.storage.chatsDir);
   cfg.storage.modelsDir = resolveFrom(ROOT, cfg.storage.modelsDir);
