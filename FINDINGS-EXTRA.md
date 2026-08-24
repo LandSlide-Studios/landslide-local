@@ -169,3 +169,22 @@ every `search()`. At 9 chats that is nothing. It is worth knowing that
 a loop, so the cost is no longer bounded by how fast a human can type into the
 Ctrl+K box. Not a problem yet, and not worth a cache until the store is large;
 recorded so the next person does not discover it as a surprise.
+
+## E16. `openChat` and `deleteChat` are the two fetches with no rejection path
+
+Every other network call in `public/app.js` handles a rejected fetch: `startNewChat`
+wraps `newChat()` and calls `notify()`, `warmModel` and `startRuntime` both catch and
+put the reason on screen, `refreshRuntime` swallows a failed poll on purpose, and
+`selectModel`'s PATCH carries `.catch(() => {})`. `openChat` and `deleteChat` do not.
+Both are `async function` bodies whose `await fetch(...)` is unguarded, and both are
+invoked from a click listener that discards the promise — so if the server is gone,
+clicking a chat row or its × produces an unhandled rejection and nothing at all
+happens on screen. `openChat` already has an `if (!res.ok) return;`, which shows the
+failure mode was thought about for an answering server and not for an absent one.
+
+Found while writing `test/ui.test.js`: an in-flight `openChat` outliving the test's
+server teardown surfaced as a bare `TypeError: fetch failed`. The test was tightened
+so it no longer races the teardown, which means the test no longer sees this — the
+app behaviour is unchanged and still there. Out of scope for I7, which is about
+tests rather than app behaviour; a two-line `try/catch` + `notify()` in each, matching
+`startNewChat`, is the whole fix.
