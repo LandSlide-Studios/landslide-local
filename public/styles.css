@@ -396,13 +396,24 @@ button, input, textarea { font-family: inherit; font-size: inherit; color: inher
   opacity: 0.85;
 }
 
+/* The blurb belongs to the card you are on.
+   Two lines of it on every card was 31px of each 100px card - a third of the
+   rail, and the rail is 556px of a 900px sidebar. Showing it only on the chosen
+   one takes the rail from 528px to 396px without losing anything you need to
+   CHOOSE with: the fit verdict, the size and whether it reasons are all in the
+   meta row below, on every card, and the full blurb is still in each card's
+   title attribute.
+   It also does something the height budget did not ask for: the chosen card is
+   the only one that explains itself, which is what being chosen should look
+   like. */
 .model-tag {
+  display: none;
   margin-top: 2px;
   font-size: 11.5px;
   line-height: 1.35;
   color: rgba(237, 233, 225, 0.62);
 }
-.model.is-active .model-tag { color: rgba(26, 26, 24, 0.72); }
+.model.is-active .model-tag { display: block; color: rgba(26, 26, 24, 0.72); }
 
 .model-meta {
   display: flex; align-items: center; gap: 6px;
