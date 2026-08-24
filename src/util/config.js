@@ -52,6 +52,7 @@ export function loadConfig({ file = path.join(ROOT, 'config.json'), env = proces
 
   if (env.LANDSLIDE_PORT) cfg.server.port = Number(env.LANDSLIDE_PORT);
   if (env.LANDSLIDE_ADAPTER) cfg.runtime.adapter = env.LANDSLIDE_ADAPTER;
+  if (env.LANDSLIDE_OLLAMA_URL) cfg.runtime.ollamaUrl = env.LANDSLIDE_OLLAMA_URL;
   if (env.LANDSLIDE_CHATS_DIR) cfg.storage.chatsDir = env.LANDSLIDE_CHATS_DIR;
   if (env.LANDSLIDE_MODELS_DIR) cfg.storage.modelsDir = env.LANDSLIDE_MODELS_DIR;
   if (env.LANDSLIDE_LOG_FILE) cfg.storage.logFile = env.LANDSLIDE_LOG_FILE;
