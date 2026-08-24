@@ -5,9 +5,11 @@
  * a disk with no network. State lives on the server; this file renders it and
  * streams replies.
  *
- * Model output is never inserted as HTML. The only rich rendering is fenced code
- * and inline code, both built as DOM nodes from escaped text.
+ * Model output is never inserted as HTML. All message rendering lives in
+ * render.js, which builds text nodes and <pre><code> elements only.
  */
+
+import { renderText, appendStream } from './render.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -33,6 +35,9 @@ const els = {
   runtimeBar: $('runtimeBar'),
   runtimeMsg: $('runtimeMsg'),
   startRuntime: $('startRuntime'),
+  notice: $('notice'),
+  noticeMsg: $('noticeMsg'),
+  noticeDismiss: $('noticeDismiss'),
   tpl: $('tpl-message'),
 };
 
@@ -44,6 +49,8 @@ const state = {
   busy: false,
   loaded: [],
   runtimeUp: false,
+  runtimeSig: null,
+  hardwareLabel: '',
   abort: null,
   timerHandle: null,
   startedAt: 0,
@@ -69,56 +76,86 @@ async function loadState() {
     state.modelId = state.models[0].id;
   }
 
-  state.runtimeUp = data.runtime.ok;
-  state.loaded = data.supervisor?.loaded ?? [];
-  renderRuntime(data);
+  state.hardwareLabel = data.hardware.label;
+  const view = data.supervisor ?? {};
+  state.runtimeSig = runtimeSignature(view);
+  renderRuntime(view);
   renderModels();
   renderFacts(data);
-  state.hardwareLabel = data.hardware.label;
   els.storageHint.textContent = data.chatsDir;
   els.storageHint.title = data.chatsDir;
 }
 
-function renderRuntime(data) {
-  const r = data.runtime;
-  const sup = data.supervisor ?? {};
-  state.runtimeUp = r.ok;
-  state.loaded = sup.loaded ?? [];
+/**
+ * `view` is exactly what the server sends from /api/runtime and as
+ * /api/state.supervisor: { adapter, running, version, error, loaded, canStart }.
+ * Nothing here decides which adapter is live or invents an error message — the
+ * page used to hardcode "ollama" and its own "not reachable", which is how it
+ * announced a healthy Ollama while the configured llama-server was dead.
+ */
+function renderRuntime(view) {
+  const adapter = view.adapter ?? 'runtime';
+  state.runtimeUp = view.running === true;
+  state.loaded = view.loaded ?? [];
 
-  els.runtimeState.textContent = r.ok
-    ? `${r.adapter} ready · ${data.hardware.label}`
-    : `${r.adapter} not running`;
-  els.runtimeState.className = `runtime-state ${r.ok ? 'is-ok' : 'is-bad'}`;
-  els.runtimeState.title = r.ok ? (sup.version ? `v${sup.version}` : '') : (r.error ?? '');
+  els.runtimeState.textContent = view.running
+    ? `${adapter} ready · ${state.hardwareLabel ?? ''}`
+    : `${adapter} not running`;
+  els.runtimeState.className = `runtime-state ${view.running ? 'is-ok' : 'is-bad'}`;
+  els.runtimeState.title = view.running ? (view.version ? `v${view.version}` : '') : (view.error ?? '');
 
-  if (r.ok) {
+  if (view.running) {
     els.runtimeBar.hidden = true;
-  } else {
-    els.runtimeBar.hidden = false;
-    els.runtimeBar.classList.remove('is-working');
-    els.runtimeMsg.textContent = sup.canStart
-      ? 'The model server is not running. Nothing will answer until it is.'
-      : 'Ollama is not running and its executable was not found. Set runtime.ollamaBin in config.json.';
-    els.startRuntime.hidden = !sup.canStart;
-    els.startRuntime.disabled = false;
-    els.startRuntime.textContent = 'Start Ollama';
+    return;
   }
+
+  const why = view.error ? ` (${view.error})` : '';
+  els.runtimeBar.hidden = false;
+  els.runtimeBar.classList.remove('is-working');
+  if (view.canStart) {
+    els.runtimeMsg.textContent = `The model server is not running${why}. Nothing will answer until it is.`;
+  } else if (adapter === 'ollama') {
+    els.runtimeMsg.textContent =
+      `Ollama is not running${why} and its executable was not found. ` +
+      'Set runtime.ollamaBin in config.json.';
+  } else {
+    els.runtimeMsg.textContent =
+      `${adapter} is not answering${why}. Start it yourself — this app can only launch Ollama.`;
+  }
+  els.startRuntime.hidden = !view.canStart;
+  els.startRuntime.disabled = false;
+  els.startRuntime.textContent = 'Start Ollama';
 }
 
 const isResident = (id) => state.loaded.some((m) => m.name === id || m.name === `${id}:latest`);
+
+/** What a re-render would actually change. Used to not re-render when nothing did. */
+const runtimeSignature = (view) =>
+  [
+    view.adapter,
+    view.running,
+    view.canStart,
+    view.error ?? '',
+    (view.loaded ?? []).map((m) => m.name).sort().join(','),
+  ].join('|');
 
 async function refreshRuntime() {
   try {
     const { runtime } = await (await fetch('/api/runtime')).json();
     const wasUp = state.runtimeUp;
-    state.runtimeUp = runtime.running;
-    state.loaded = runtime.loaded ?? [];
-    renderRuntime({
-      runtime: { ok: runtime.running, adapter: 'ollama', error: 'not reachable' },
-      supervisor: runtime,
-      hardware: { label: state.hardwareLabel ?? '' },
-    });
-    renderModels();
+    const signature = runtimeSignature(runtime);
+
+    // replaceChildren on the radiogroup destroys focus. Doing that every twelve
+    // seconds meant a keyboard user could never stay on a model card.
+    if (signature !== state.runtimeSig) {
+      state.runtimeSig = signature;
+      renderRuntime(runtime);
+      renderModels();
+    } else {
+      state.runtimeUp = runtime.running === true;
+      state.loaded = runtime.loaded ?? [];
+    }
+
     if (!wasUp && runtime.running) await loadChats(els.chatSearch.value);
   } catch {
     /* a failed poll is not worth surfacing */
@@ -150,18 +187,51 @@ async function startRuntime() {
   }
 }
 
+/**
+ * The one place a failure is allowed to live.
+ *
+ * A message written onto a model card is destroyed milliseconds later by the
+ * next renderModels(), so the user never sees it. This element is outside every
+ * list that gets rebuilt, and stays until it is dismissed or replaced.
+ */
+function notify(message) {
+  els.noticeMsg.textContent = message;
+  els.notice.hidden = false;
+}
+
+function clearNotice() {
+  els.notice.hidden = true;
+  els.noticeMsg.textContent = '';
+}
+
 async function warmModel(id, button) {
+  const name = state.models.find((m) => m.id === id)?.name ?? id;
   button.disabled = true;
   button.textContent = 'Loading';
-  const { result } = await (
-    await fetch('/api/runtime/warm', {
+  try {
+    const res = await fetch('/api/runtime/warm', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ modelId: id }),
-    })
-  ).json();
-  button.textContent = result.ok ? 'Ready' : 'Failed';
-  await refreshRuntime();
+    });
+    const payload = await res.json().catch(() => null);
+    if (!res.ok) throw new Error(payload?.error ?? `server returned ${res.status}`);
+
+    if (payload?.result?.ok) {
+      clearNotice();
+      button.textContent = 'Ready';
+    } else {
+      notify(`Could not preload ${name}: ${payload?.result?.error ?? 'the runtime did not load it'}`);
+      button.textContent = 'Retry';
+    }
+  } catch (err) {
+    // Without this, a rejected fetch left the button reading "Loading" forever.
+    notify(`Could not preload ${name}: ${err.message ?? err}`);
+    button.textContent = 'Retry';
+  } finally {
+    button.disabled = false;
+    await refreshRuntime();
+  }
 }
 
 function renderFacts(data) {
@@ -319,20 +389,48 @@ function renderChats() {
   );
 }
 
+/**
+ * Switching what the thread shows while a reply is streaming detaches the node
+ * the stream is writing into, and the generation carries on with nowhere to go:
+ * the GPU keeps working and the answer is lost. Stop first, then switch.
+ */
+function busyBlocks(action) {
+  if (!state.busy) return false;
+  notify(`${action} while a reply is generating would discard it. Press Stop (or Esc) first.`);
+  return true;
+}
+
+/** Throws on failure: the caller has to decide what a dead server means for it. */
 async function newChat() {
   const res = await fetch('/api/chats', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ modelId: state.modelId }),
   });
+  if (!res.ok) {
+    const payload = await res.json().catch(() => null);
+    throw new Error(payload?.error ?? `could not create a chat (server returned ${res.status})`);
+  }
   const { chat } = await res.json();
   state.chatId = chat.id;
   await loadChats(els.chatSearch.value);
   renderThread(chat);
   els.prompt.focus();
+  return chat;
+}
+
+async function startNewChat() {
+  if (busyBlocks('Starting a new chat')) return;
+  try {
+    await newChat();
+    clearNotice();
+  } catch (err) {
+    notify(String(err.message ?? err));
+  }
 }
 
 async function openChat(id) {
+  if (busyBlocks('Opening another chat')) return;
   const res = await fetch(`/api/chats/${id}`);
   if (!res.ok) return;
   const { chat } = await res.json();
@@ -402,52 +500,6 @@ function statLine(s) {
   return bits.join('  ·  ');
 }
 
-/** Fenced and inline code only, all built from text nodes. Never innerHTML. */
-function renderText(el, text) {
-  el.replaceChildren();
-  const parts = String(text).split(/```/);
-  parts.forEach((part, i) => {
-    if (i % 2 === 1) {
-      const pre = document.createElement('pre');
-      const code = document.createElement('code');
-      code.textContent = part.replace(/^[a-zA-Z0-9+-]*\n/, '');
-      pre.append(code);
-      el.append(pre);
-    } else {
-      appendInline(el, part);
-    }
-  });
-}
-
-function appendInline(el, text) {
-  const chunks = String(text).split(/`/);
-  chunks.forEach((chunk, i) => {
-    if (i % 2 === 1) {
-      const code = document.createElement('code');
-      code.textContent = chunk;
-      el.append(code);
-    } else if (chunk) {
-      el.append(document.createTextNode(chunk));
-    }
-  });
-}
-
-/**
- * Rebuilding the entire subtree from the full accumulated answer on every token
- * is quadratic — a 4,000-token reply meant 4,000 rebuilds of a growing string.
- * renderText only treats backticks specially, so a chunk without one can be
- * appended to the trailing text node in constant time.
- */
-function appendStream(el, fullText, chunk) {
-  if (chunk.includes('`')) {
-    renderText(el, fullText);
-    return;
-  }
-  const last = el.lastChild;
-  if (last && last.nodeType === Node.TEXT_NODE) last.appendData(chunk);
-  else el.append(document.createTextNode(chunk));
-}
-
 let thinkScrollQueued = false;
 function scheduleThinkScroll(el) {
   if (thinkScrollQueued) return;
@@ -475,7 +527,22 @@ async function send(text) {
   state.busy = true; // claim synchronously: `await newChat()` below yields, and
   // Enter autorepeat walks straight into the gap, creating two chats and two
   // concurrent streams that overwrite each other's abort handle and timer.
-  if (!state.chatId) await newChat();
+  if (!state.chatId) {
+    try {
+      await newChat();
+    } catch (err) {
+      // The claim above is only safe if every path out of here releases it.
+      // It did not: a failed create threw before setBusy(true) ever ran, so
+      // busy stayed true, the composer stayed dead and only a reload recovered.
+      state.busy = false;
+      notify(`Could not start a chat: ${err.message ?? err}. Your message was not sent.`);
+      els.prompt.value = text;
+      updateCount();
+      autoGrow();
+      els.prompt.focus();
+      return;
+    }
+  }
 
   const model = currentModel();
   els.emptyState.hidden = true;
@@ -609,6 +676,9 @@ function setBusy(busy, label = 'Thinking') {
   state.timerHandle = null;
   els.send.disabled = busy;
   els.prompt.disabled = busy;
+  // Honest affordance for the gate in busyBlocks(): the button is not merely
+  // ignored while a reply is streaming, it visibly cannot be pressed.
+  els.newChat.disabled = busy;
   els.statusBar.hidden = !busy;
 
   if (busy) {
@@ -666,7 +736,8 @@ function wireEvents() {
   }, 12000);
 
   els.stopBtn.addEventListener('click', () => state.abort?.abort());
-  els.newChat.addEventListener('click', () => newChat());
+  els.newChat.addEventListener('click', () => startNewChat());
+  els.noticeDismiss.addEventListener('click', () => clearNotice());
 
   let searchTimer;
   els.chatSearch.addEventListener('input', () => {
@@ -682,7 +753,7 @@ function wireEvents() {
     }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'n') {
       e.preventDefault();
-      newChat();
+      startNewChat();
     }
     if (e.key === 'Escape' && state.busy) state.abort?.abort();
   });

@@ -12,6 +12,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { loadConfig, ROOT } from '../src/util/config.js';
 import * as catalog from '../src/core/model-catalog.js';
+import { canDeleteRaw, findRegistryEntry } from '../src/core/raw-cleanup.js';
 
 const results = [];
 const pass = (name, detail = '') => results.push({ level: 'PASS', name, detail });
@@ -82,14 +83,23 @@ try {
 if (config) {
   // The raw GGUF is deleted once Ollama has its own copy, so the registry -
   // not the models folder - is the source of truth for "do I have this".
+  // "Has it" uses the same identity notion as the cleanup: an entry matching
+  // this id, not merely a name that looks familiar.
   const registered = await ollamaTags(config);
   const missing = [];
   let rawBytes = 0;
+  let reclaimableBytes = 0;
   for (const m of catalog.all()) {
     const rawSize = await sizeOf(path.join(config.storage.modelsDir, m.file));
     rawBytes += rawSize;
-    const have = registered.has(m.id) || registered.has(`${m.id}:latest`) || rawSize > 0;
-    if (!have) missing.push(m.id);
+    const entry = findRegistryEntry(m.id, registered);
+    if (!entry && rawSize === 0) missing.push(m.id);
+    // Only count what the cleanup would actually be allowed to remove. The old
+    // line recommended --cleanup-raw on a name match alone, which is the same
+    // blind spot that made the cleanup itself unsafe.
+    if (canDeleteRaw({ modelId: m.id, fileBytes: rawSize, registryEntry: entry }).ok) {
+      reclaimableBytes += rawSize;
+    }
   }
   const have = catalog.all().length - missing.length;
   const detail =
@@ -98,8 +108,12 @@ if (config) {
   if (missing.length === 0) pass('models available', detail);
   else warn('models available', `${detail || `${have}/${catalog.all().length} available`}; missing: ${missing.join(', ')}`);
 
-  if (rawBytes > 1024 ** 3 && have === catalog.all().length) {
-    warn('raw GGUF duplicates', `run: node scripts/fetch-models.mjs --cleanup-raw`);
+  if (reclaimableBytes > 1024 ** 3) {
+    warn(
+      'raw GGUF duplicates',
+      `${(reclaimableBytes / 1024 ** 3).toFixed(2)} GiB is registered and safe to drop: ` +
+        `node scripts/fetch-models.mjs --cleanup-raw`,
+    );
   }
 
   /* 7. Catalog flag check - NOT a behavioural claim ------------------ */
@@ -159,17 +173,18 @@ async function* walk(dir) {
   }
 }
 
+/** The registry entries themselves, not just their names: size is half of identity. */
 async function ollamaTags(config) {
-  if (config.runtime.adapter === 'llamacpp') return new Set();
+  if (config.runtime.adapter === 'llamacpp') return [];
   try {
     const res = await fetch(`${config.runtime.ollamaUrl}/api/tags`, {
       signal: AbortSignal.timeout(4000),
     });
-    if (!res.ok) return new Set();
+    if (!res.ok) return [];
     const body = await res.json();
-    return new Set((body.models ?? []).map((m) => m.name));
+    return body.models ?? [];
   } catch {
-    return new Set();
+    return [];
   }
 }
 

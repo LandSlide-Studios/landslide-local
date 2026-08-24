@@ -3,10 +3,12 @@
  * with the facts needed to decide whether one will actually run here.
  *
  * Interface:
- *   all()                  -> Model[]
- *   get(id)                -> Model | undefined
- *   fitFor(model, vramGb)  -> { verdict, headroomGb, note }
- *   withAvailability(list) -> Model[]  (marks .installed from runtime tags)
+ *   all()                     -> Model[]
+ *   get(id)                   -> Model | undefined
+ *   fitFor(model, vramGb)     -> { verdict, headroomGb, note }
+ *   withAvailability(list)    -> Model[]  (marks .installed from runtime tags)
+ *   optionsFor(model, asked)  -> the generation options that may reach a runtime
+ *   KEEP_ALIVE                -> how long a loaded model is asked to stay resident
  *
  * Sizes and filenames are verified against the Hugging Face repos with a HEAD request
  * (scripts/verify-urls.mjs), not guessed. Sizes are GiB, matching how VRAM is measured;
@@ -15,6 +17,35 @@
  */
 
 const RUNTIME_RESERVE_GB = 0.85;
+
+/**
+ * How long the runner is asked to keep a model resident.
+ *
+ * Every request that touches a model must state the SAME value. Ollama resets
+ * the eviction timer from whatever the current request says, so a preload
+ * asking for 30 minutes followed by a chat call that says nothing drops the
+ * model back to the server's 5-minute default — which is how "models stay
+ * loaded for 30 minutes" stopped being true after the first message.
+ */
+export const KEEP_ALIVE = '30m';
+
+/**
+ * The only generation options that may reach a runtime, and the range each is
+ * allowed to hold. Anything outside this table is dropped rather than
+ * forwarded: `num_predict: -1` means "generate until the context is full",
+ * which on a shared 8 GB card is a request to hang the machine.
+ *
+ * `unboundedMeansMax` reads Ollama's "no limit" sentinels (-1, 0) as "as much
+ * as this app allows" instead of clamping them to one token.
+ */
+const OPTION_LIMITS = Object.freeze({
+  temperature: { min: 0, max: 2 },
+  top_p: { min: 0, max: 1 },
+  top_k: { min: 1, max: 1000, integer: true },
+  repeat_penalty: { min: 0.1, max: 2 },
+  num_ctx: { min: 256, max: 262144, integer: true },
+  num_predict: { min: 1, max: 32768, integer: true, unboundedMeansMax: true },
+});
 
 /** @type {ReadonlyArray<Model>} */
 const MODELS = Object.freeze([
@@ -154,4 +185,38 @@ export function withAvailability(installedTags = []) {
   }));
 }
 
+/**
+ * The generation options a runtime is allowed to receive for this model.
+ *
+ * A whitelist, not a merge: the model's own defaults are the base, a caller may
+ * move a known knob within a sane range, and everything else is dropped. This
+ * is what keeps the HTTP layer honest — a request cannot invent a parameter,
+ * and cannot ask for an unbounded generation.
+ *
+ * @param {{ defaults?: Record<string, number> }} model
+ * @param {Record<string, unknown>} [asked] caller-supplied overrides, untrusted
+ * @returns {Record<string, number>}
+ */
+export function optionsFor(model, asked = {}) {
+  const overrides = asked && typeof asked === 'object' && !Array.isArray(asked) ? asked : {};
+  const merged = { ...(model?.defaults ?? {}), ...overrides };
+
+  const out = {};
+  for (const [key, limit] of Object.entries(OPTION_LIMITS)) {
+    if (!(key in merged)) continue;
+    const value = clampOption(merged[key], limit);
+    if (value !== null) out[key] = value;
+  }
+  return out;
+}
+
+function clampOption(raw, limit) {
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return null;
+  if (limit.unboundedMeansMax && n <= 0) return limit.max;
+  const bounded = Math.min(limit.max, Math.max(limit.min, n));
+  return limit.integer ? Math.round(bounded) : bounded;
+}
+
 export const RESERVE_GB = RUNTIME_RESERVE_GB;
+export { OPTION_LIMITS };

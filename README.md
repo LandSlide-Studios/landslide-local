@@ -9,11 +9,15 @@ history — sits on your N: drive.
 
 ## First run
 
-**1. Update Ollama.** Your installed 0.7.0 predates Qwen 3.5 and cannot load these models.
+**1. Ollama must be 0.32 or newer.** Anything from the 0.x series before that predates
+Qwen 3.5 and cannot load these models. This machine is on **0.32.15**, so there is
+nothing to do here; on a fresh machine:
 
 ```
 winget upgrade --id Ollama.Ollama
 ```
+
+`npm run preflight` prints the version it actually found and warns if it is too old.
 
 **2. Set the Ollama environment once.** These matter a great deal on 8 GB of VRAM —
 flash attention plus an 8-bit KV cache roughly halves context memory, which is what
@@ -87,7 +91,14 @@ back empty after the store moved.
 
 **Preload** on each model card loads it into VRAM ahead of time. Loading a 9B off the
 SSD costs about 20 seconds, and without preloading you pay that on your first message.
-A model already resident shows **in VRAM** instead. Models stay loaded for 30 minutes.
+A model already resident shows **in VRAM** instead.
+
+Once loaded, a model stays resident for 30 minutes after the last request that touched
+it. Both the preload and every chat message ask for the same 30 minutes, and both ask
+for the same context size — otherwise Ollama resets the timer to its own 5-minute
+default and reloads the model at a different context on the first message, which is
+exactly the reload the preload was meant to avoid. This applies to Ollama; llama-server
+has no equivalent and keeps its model loaded for as long as it runs.
 
 ---
 
@@ -153,4 +164,18 @@ GGUF. Start `llama-server` on port 8080, then change one line in `config.json`:
 { "runtime": { "adapter": "llamacpp" } }
 ```
 
-That is the entire migration — the app talks to both through the same interface.
+Chatting works immediately: both runtimes sit behind the same interface, and the
+sidebar names whichever one is configured and reports its real health.
+
+What does **not** carry over, because it is Ollama-specific:
+
+- **Start Ollama** — the app can only launch Ollama. Start `llama-server` yourself.
+- **Preload / in VRAM** — llama-server holds one model for its whole lifetime;
+  there is nothing to preload and no residency list to show.
+- **Model choice** — llama-server serves the single GGUF it was started with, so
+  picking another card in the sidebar does not switch models. Restart it with a
+  different `-m` instead.
+- `fetch-models.mjs --cleanup-raw` — it deletes a raw GGUF only once Ollama's registry
+  holds a copy. With llama.cpp the raw file *is* the model. Never run it.
+
+So: one line to switch what answers, and four Ollama-only conveniences you lose.

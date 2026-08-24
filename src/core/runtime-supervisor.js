@@ -24,16 +24,26 @@ import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
 import { access } from 'node:fs/promises';
 import path from 'node:path';
+import * as catalog from './model-catalog.js';
 
 const HEALTH_TIMEOUT_MS = 60_000;
 const HEALTH_POLL_MS = 500;
 const WARM_TIMEOUT_MS = 300_000;
 
-const WINDOWS_CANDIDATES = [
-  path.join(process.env.LOCALAPPDATA ?? '', 'Programs', 'Ollama', 'ollama.exe'),
-  path.join(process.env.ProgramFiles ?? '', 'Ollama', 'ollama.exe'),
-];
 const POSIX_CANDIDATES = ['/usr/local/bin/ollama', '/opt/homebrew/bin/ollama', '/usr/bin/ollama'];
+
+/**
+ * Built per call, not once at import: `path.join('', 'Programs', ...)` yields a
+ * RELATIVE path when LOCALAPPDATA is unset, and a relative path resolves
+ * against whatever the working directory happens to be. Only absolute
+ * candidates are ever considered — this decides what gets executed.
+ */
+function windowsCandidates(env = process.env) {
+  return [
+    env.LOCALAPPDATA ? path.join(env.LOCALAPPDATA, 'Programs', 'Ollama', 'ollama.exe') : '',
+    env.ProgramFiles ? path.join(env.ProgramFiles, 'Ollama', 'ollama.exe') : '',
+  ];
+}
 
 export function createRuntimeSupervisor(runtimeConfig = {}) {
   const base = (runtimeConfig.ollamaUrl ?? 'http://127.0.0.1:11434').replace(/\/+$/, '');
@@ -43,11 +53,12 @@ export function createRuntimeSupervisor(runtimeConfig = {}) {
 
   async function findBin() {
     if (configuredBin) {
+      if (!path.isAbsolute(configuredBin)) return null;
       return (await canExecute(configuredBin)) ? configuredBin : null;
     }
-    const candidates = process.platform === 'win32' ? WINDOWS_CANDIDATES : POSIX_CANDIDATES;
+    const candidates = process.platform === 'win32' ? windowsCandidates() : POSIX_CANDIDATES;
     for (const c of candidates) {
-      if (c && (await canExecute(c))) return c;
+      if (c && path.isAbsolute(c) && (await canExecute(c))) return c;
     }
     return null;
   }
@@ -91,14 +102,22 @@ export function createRuntimeSupervisor(runtimeConfig = {}) {
       };
     },
 
-    /** Idempotent, and safe to call twice: concurrent callers share one attempt. */
+    /**
+     * Idempotent, and safe to call twice: concurrent callers share one attempt.
+     *
+     * The latch is claimed BEFORE the first await. Checking it after
+     * `await version()` made it a suggestion rather than a claim — two callers
+     * both saw `starting === null` inside the same tick and each spawned an
+     * `ollama serve`.
+     */
     async start() {
-      const already = await version();
-      if (already) return { ok: true, version: already, tookMs: 0, alreadyRunning: true };
       if (starting) return starting;
 
       starting = (async () => {
         const began = Date.now();
+        const already = await version();
+        if (already) return { ok: true, version: already, tookMs: 0, alreadyRunning: true };
+
         const bin = await findBin();
         if (!bin) {
           return {
@@ -108,6 +127,11 @@ export function createRuntimeSupervisor(runtimeConfig = {}) {
           };
         }
 
+        // A spawn that dies has a reason, and it is the only useful thing this
+        // function can say. Swallowing it meant a doomed launch burned the full
+        // 60-second health timeout and then reported nothing but the timeout.
+        let spawnError = null;
+        let earlyExit = null;
         try {
           const child = spawn(bin, ['serve'], {
             // Explicit env is the point: a stale environment block is why the
@@ -118,9 +142,14 @@ export function createRuntimeSupervisor(runtimeConfig = {}) {
             shell: false,
           });
           child.unref(); // outlive this server; the user's models should not die with it
-          child.on('error', () => {});
+          child.on('error', (err) => {
+            spawnError = err;
+          });
+          child.on('exit', (code, signal) => {
+            earlyExit = { code, signal };
+          });
         } catch (err) {
-          return { ok: false, tookMs: Date.now() - began, error: String(err.message ?? err) };
+          return { ok: false, tookMs: Date.now() - began, error: describeSpawn(bin, err) };
         }
 
         const deadline = Date.now() + HEALTH_TIMEOUT_MS;
@@ -128,6 +157,20 @@ export function createRuntimeSupervisor(runtimeConfig = {}) {
           await sleep(HEALTH_POLL_MS);
           const v = await version();
           if (v) return { ok: true, version: v, tookMs: Date.now() - began };
+          if (spawnError) {
+            return { ok: false, tookMs: Date.now() - began, error: describeSpawn(bin, spawnError) };
+          }
+          if (earlyExit) {
+            // It exited without ever answering; waiting out the timeout only
+            // delays the same failure.
+            return {
+              ok: false,
+              tookMs: Date.now() - began,
+              error:
+                `${bin} exited immediately (${earlyExit.signal ?? `code ${earlyExit.code}`}) ` +
+                'without answering. Run it once in a terminal to see why.',
+            };
+          }
         }
         return {
           ok: false,
@@ -144,14 +187,22 @@ export function createRuntimeSupervisor(runtimeConfig = {}) {
     /**
      * Preload a model into VRAM. Without this the first message of a session
      * pays the whole load cost - about 20 seconds for a 9B off a SATA SSD.
+     *
+     * It sends the model's catalog defaults, because a runner loads a model AT
+     * a context size. Preloading with no options loaded it at the server
+     * default and the first message - which does state num_ctx - threw that
+     * away and loaded it again, so the preload bought nothing.
      */
     async warm(modelId) {
       const began = Date.now();
+      const model = catalog.get(modelId);
+      const payload = { model: modelId, prompt: '', keep_alive: catalog.KEEP_ALIVE };
+      if (model) payload.options = catalog.optionsFor(model);
       try {
         const res = await fetch(`${base}/api/generate`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ model: modelId, prompt: '', keep_alive: '30m' }),
+          body: JSON.stringify(payload),
           signal: AbortSignal.timeout(WARM_TIMEOUT_MS),
         });
         if (!res.ok) {
@@ -165,6 +216,12 @@ export function createRuntimeSupervisor(runtimeConfig = {}) {
       }
     },
   };
+}
+
+/** The OS error, not "something went wrong". ENOENT and EACCES mean different fixes. */
+function describeSpawn(bin, err) {
+  const code = err?.code ? `${err.code}: ` : '';
+  return `Could not launch ${bin} — ${code}${String(err?.message ?? err)}`;
 }
 
 function canExecute(p) {

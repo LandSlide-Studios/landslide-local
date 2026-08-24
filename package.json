@@ -9,8 +9,11 @@
   },
   "scripts": {
     "start": "node src/server.js",
-    "test": "node --test",
+    "test": "node --test --test-force-exit",
     "preflight": "node scripts/preflight.mjs",
-    "fetch-models": "node scripts/fetch-models.mjs"
+    "fetch-models": "node scripts/fetch-models.mjs",
+    "test:acceptance": "node --test --test-force-exit \"test/acceptance/*.test.js\"",
+    "lock": "node scripts/acceptance-lock.mjs --verify",
+    "gates": "npm run lock && npm test && npm run preflight"
   }
 }

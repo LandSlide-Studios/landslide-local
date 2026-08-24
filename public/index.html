@@ -25,6 +25,13 @@
       <button id="startRuntime" class="btn btn-accent btn-sm" type="button">Start Ollama</button>
     </div>
 
+    <!-- Outside every list that gets rebuilt, so a failure message survives the
+         next render instead of being wiped milliseconds after it appears. -->
+    <div id="notice" class="notice" role="status" aria-live="polite" hidden>
+      <span id="noticeMsg" class="notice-msg"></span>
+      <button id="noticeDismiss" class="notice-x" type="button" aria-label="Dismiss">×</button>
+    </div>
+
     <section class="panel">
       <h2 class="panel-title">Model</h2>
       <div id="modelList" class="model-list" role="radiogroup" aria-label="Choose a model"></div>

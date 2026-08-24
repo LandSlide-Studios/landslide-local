@@ -1,0 +1,76 @@
+# FINDINGS-EXTRA — noticed while building I0, deliberately NOT fixed
+
+Out of scope for I0. Recorded here rather than absorbed, per the loop protocol.
+Ordered by how much they would cost to leave.
+
+---
+
+## E1. `deleteChat` is the third door onto the M8 bug (frontend)
+
+`public/app.js` — M8 named the New-chat button, Ctrl+N and chat rows, and all
+three are now gated by `busyBlocks()`. `deleteChat(id)` is the same bug through a
+door the finding did not name: deleting the chat that is currently streaming runs
+`els.thread.replaceChildren(els.emptyState)`, detaching the node the stream is
+writing into, and the generation is never aborted — the GPU keeps working with
+nowhere to put the answer.
+
+One line, same helper: `if (busyBlocks('Deleting this chat')) return;` — but only
+when `id === state.chatId`, since deleting some *other* chat mid-stream is
+harmless and should stay allowed.
+
+## E2. Old replies are labelled with the currently selected model
+
+`public/app.js` `buildMessage()` sets the role line from `currentModel()?.name`
+for every assistant message, including ones loaded from disk. Open a chat that
+was answered by Deckard while Cold Fusion is selected and every historical reply
+claims Cold Fusion wrote it. The correct name is not recoverable per message:
+chats store one `modelId`, so proper provenance needs `messages[].modelId`
+recorded at append time. Directly undermines the "switching models
+mid-conversation is fine" line in the README.
+
+## E3. `PATCH /api/chats/:id` accepts any string as `modelId`
+
+`applyPatch()` in `src/core/chat-store.js` is already a whitelist (title and
+modelId only), but `modelId` is never checked against the catalog, so a request
+can persist `"modelId": "dolphin-llama3:70b"` onto a chat record. It is not an
+execution path — `postMessage` validates `body.modelId` against the catalog
+independently and I0-I5 closed the runtime side — so this is data integrity, not
+a way to run an unlisted model. It does mean a chat can be left pointing at a
+model the sidebar cannot show.
+
+## E4. A failing acceptance test hangs `node --test`
+
+Every test in `test/acceptance/` does `await a.close()` / `await stub.close()` as
+its *last* statements, so an assertion failure skips them and leaves the stub and
+the app server listening. Node then cannot exit and the run sits there until the
+outer timeout — before the I0 fixes, `node --test "test/acceptance/i0-*.test.js"`
+never terminated, which reads as "the suite is hung" rather than "19 tests
+failed". The fix is `t.after(() => ...)` (or try/finally) instead of trailing
+closes.
+
+Worse, and separate: **`node --test` (the PLAN.md gate) never returns at all
+right now.** All 200 tests run and report, then the process hangs. Isolated by
+running each suite alone: `i3-mcp.test.js` is the one that hangs — it waits on an
+MCP stdio server that does not exist yet, and `--test-force-exit` does not
+release it. Every other suite finishes in under 10 seconds. Until I3 is built,
+that gate has to be run with an external timeout and read from the printed
+summary. Acceptance files are not the builder's to edit; this is for the planner.
+
+## E5. `config.json` breaks the convention CLAUDE.md states
+
+CLAUDE.md: *"Windows paths in `config.json` use **forward slashes**."*
+`runtime.ollamaEnv.OLLAMA_MODELS` is `"N:\ollama-models"`. It parses — the
+backslash is escaped — but it is the one place in the file that does it, and the
+convention exists because the unescaped version is a confusing JSON failure.
+
+## E6. Dead code in `scripts/preflight.mjs`
+
+`exists()` at the bottom of the file has no callers.
+
+## E7. `src/runtime/llamacpp.js` sends non-OpenAI fields
+
+`stream()` puts `top_k` and `repeat_penalty` at the top level of the
+`/v1/chat/completions` body. llama-server accepts both as extensions; any other
+OpenAI-compatible server would reject the request. Fine while llama-server is the
+only target — worth a comment saying so, since the file describes itself as
+"OpenAI-compatible".

@@ -18,6 +18,7 @@
  */
 
 import { createThinkStream } from '../core/think-stream.js';
+import { KEEP_ALIVE } from '../core/model-catalog.js';
 import { ollamaAdapter } from './ollama.js';
 import { llamaCppAdapter } from './llamacpp.js';
 import { fakeAdapter } from './fake.js';
@@ -62,7 +63,12 @@ export function createRuntime(runtimeConfig = {}) {
         throw new Error('chat requires at least one message');
       }
 
-      const think = createThinkStream({ startInThink: options.startInThink === true });
+      // Residency is a facade concern, not a protocol one: every call that
+      // touches a model must ask for the same keep-alive, or the first message
+      // after a preload silently resets it to the server's 5-minute default.
+      const runOptions = { keepAlive: KEEP_ALIVE, ...options };
+
+      const think = createThinkStream({ startInThink: runOptions.startInThink === true });
       const started = Date.now();
       let firstTokenMs = null;
       let answer = '';
@@ -81,7 +87,7 @@ export function createRuntime(runtimeConfig = {}) {
       };
 
       try {
-        for await (const delta of adapter.stream({ model, messages, options, signal })) {
+        for await (const delta of adapter.stream({ model, messages, options: runOptions, signal })) {
           // Out-of-band reasoning is already unambiguous; re-parsing it through
           // ThinkStream could only lose information, so it bypasses.
           if (delta.thinking) {

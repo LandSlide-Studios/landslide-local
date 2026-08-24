@@ -53,6 +53,16 @@ export async function createServer(overrides = {}) {
       return;
     }
 
+    // An Origin check alone does not stop DNS rebinding: a page on evil.example
+    // whose name resolves to 127.0.0.1 is same-origin with itself, sends no
+    // cross-origin Origin, and could read every chat on disk. What gives it away
+    // is the Host header, which still says evil.example. Only loopback names are
+    // accepted. (A request with no Host cannot have been rebound to one.)
+    if (req.headers.host && !isLoopbackHost(req.headers.host)) {
+      res.writeHead(403).end('this server only answers to a loopback host name');
+      return;
+    }
+
     try {
       if (await api(req, res, url)) return;
       await serveStatic(req, res, url);
@@ -73,13 +83,24 @@ function mergeConfig(base, extra) {
   return out;
 }
 
+const LOOPBACK_NAMES = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
+
 function isLoopback(origin) {
   try {
     const { hostname } = new URL(origin);
-    return hostname === '127.0.0.1' || hostname === 'localhost' || hostname === '::1';
+    return LOOPBACK_NAMES.has(hostname) || LOOPBACK_NAMES.has(`[${hostname}]`);
   } catch {
     return false;
   }
+}
+
+/** A Host header is `name` or `name:port`, and may be a bracketed IPv6 literal. */
+function isLoopbackHost(host) {
+  const value = String(host).trim().toLowerCase();
+  const name = value.startsWith('[')
+    ? value.slice(0, value.indexOf(']') + 1)
+    : value.split(':')[0];
+  return LOOPBACK_NAMES.has(name);
 }
 
 async function serveStatic(req, res, url) {

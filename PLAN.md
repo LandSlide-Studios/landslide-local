@@ -109,10 +109,15 @@ and move on rather than grinding.
 
 ```
 node scripts/acceptance-lock.mjs --verify   # checksums intact
-node --test                                 # whole suite incl. acceptance
+node --test --test-force-exit               # whole suite incl. acceptance
 node scripts/preflight.mjs                  # 0 FAIL
 node scripts/verify-live.mjs                # reaches a real model
 ```
+
+`--test-force-exit` is required, not cosmetic. An acceptance test that fails
+skips its own trailing `close()`, leaking a listening server that holds the
+event loop open forever - the runner printed a correct summary and then hung.
+The flag is the fix; the leak itself is logged as a harness debt item.
 
 ## Branching
 
@@ -125,7 +130,7 @@ second approval the loop is designed to stop at.
 
 | # | Item | Status | Branch | Done when |
 |---|------|--------|--------|-----------|
-| I0 | Second-review findings: C1 raw-GGUF deleted by name not identity (data loss), I2 poll lies about which adapter is live, I3 preload keep_alive/num_ctx mismatch so it does not actually help, I4 streamed code blocks render outside the code box, I5 `runtimeModelTag`/`options` bypass the catalog, M6 failed newChat wedges the composer, M7 preload failure shows nothing, M8 switching chats mid-stream eats the reply, M9 spawn errors swallowed, L10-L14, plus the false README/CLAUDE claims | todo | - | acceptance/i0 green: cleanup cannot delete a file whose size disagrees with the registry entry; the adapter shown is the adapter configured; a warmed model serves the next message without reloading; a stream ending inside a fence renders identically to a reload; no request-supplied string reaches the runtime as a model id |
+| I0 | Second-review findings: C1 raw-GGUF deleted by name not identity (data loss), I2 poll lies about which adapter is live, I3 preload keep_alive/num_ctx mismatch so it does not actually help, I4 streamed code blocks render outside the code box, I5 `runtimeModelTag`/`options` bypass the catalog, M6 failed newChat wedges the composer, M7 preload failure shows nothing, M8 switching chats mid-stream eats the reply, M9 spawn errors swallowed, L10-L14, plus the false README/CLAUDE claims | building | loop/i0-review-findings | acceptance/i0 green: cleanup cannot delete a file whose size disagrees with the registry entry; the adapter shown is the adapter configured; a warmed model serves the next message without reloading; a stream ending inside a fence renders identically to a reload; no request-supplied string reaches the runtime as a model id |
 | I8 | Per-model output formatting: render markdown (headings, lists, bold, tables, blockquotes) not just fenced code, with a per-model profile so a prose model and a table-heavy model each render the way they actually write | todo | - | acceptance/i8 green: markdown tables, lists, headings and emphasis render as elements not literal asterisks; each catalog model declares a format profile; model output is still never inserted as HTML |
 | I1 | Quality of life: context meter + auto-trim, system prompt panel, regenerate/edit/branch, parameter controls, rename in UI, markdown export, unload-model, prompt library, model-list keyboard nav, auto-preload on select | todo | - | acceptance/i1 green: a chat exceeding num_ctx never silently drops turns; a system prompt set in the UI reaches the model; regenerate replaces the last reply; every listed control is reachable by keyboard |
 | I2 | Architecture: catalog becomes data (`models.json`), split `api.js`, split `public/app.js` into ES modules, one shared event-schema module used by both sides, single explicit reasoning path | todo | - | acceptance/i2 green: adding a model requires no source edit; no file over 400 lines in `src/` or `public/`; front and back import the same event constants; `node --test` still green |

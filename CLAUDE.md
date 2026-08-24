@@ -11,9 +11,11 @@ Offline chat client for uncensored Qwen 3.5 GGUF models. Runs on Tommy's machine
    Fonts link, no remote images. Fonts are local `.woff2` files in `public/fonts`.
    `scripts/fetch-models.mjs` is the single exempt file — it is the one-time downloader.
    Preflight greps for this and FAILs on a violation.
-3. **Model output never reaches `innerHTML`.** `renderText` in `public/app.js` builds
-   text nodes and `<pre><code>` elements only. An uncensored local model is untrusted
-   input like any other.
+3. **Model output never reaches `innerHTML`.** `public/render.js` builds text nodes and
+   `<pre><code>` elements only, and it is the only module allowed to turn model output
+   into DOM. An uncensored local model is untrusted input like any other. Streamed
+   output must render identically to the same text re-rendered after a reload — that
+   equivalence is what `test/acceptance/i0-*.test.js` pins.
 4. **Loopback only.** The server binds `127.0.0.1` and rejects non-loopback `Origin`.
    Do not add a `0.0.0.0` bind or a CORS allowance.
 
@@ -44,9 +46,16 @@ them is hypothetical.
 - `RuntimeSupervisor` (`src/core/runtime-supervisor.js`) starts Ollama with the env
   from `config.json` rather than an inherited one. That is deliberate and load-bearing:
   a stale environment block is why a model store on another drive goes unseen. The
-  executable path comes from config or a known install location, **never from a
-  request**, and the only value the HTTP layer forwards is a model id already in the
-  catalog.
+  executable path comes from config or a known absolute install location, **never from
+  a request**.
+- **Nothing a request says becomes a model id.** `src/api.js` sends `model.id` from the
+  catalog and nothing else; there is no field a caller can set to name a different one.
+  The only other value it forwards is generation options, and those go through
+  `catalog.optionsFor()`, which is a whitelist with a clamp — an unknown key is
+  dropped and `num_predict: -1` cannot be reached.
+- `src/core/raw-cleanup.js` owns the decision to delete a downloaded GGUF. Name plus
+  size, never name alone: the raw file is frequently the only copy, and there is no
+  offline path to fetch it again.
 
 ## Conventions
 

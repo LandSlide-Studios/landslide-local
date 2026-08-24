@@ -32,6 +32,10 @@ export function ollamaAdapter(config = {}) {
           model,
           messages: messages.map(({ role, content }) => ({ role, content })),
           stream: true,
+          // Ollama resets the eviction timer from whatever each request says.
+          // Omitting it dropped a model preloaded for 30 minutes back to the
+          // 5-minute default on the very first message.
+          keep_alive: options.keepAlive,
           options: {
             temperature: options.temperature,
             top_p: options.top_p,

@@ -3,8 +3,14 @@
  *
  * Worth having as a real second adapter, not a hypothetical one: Ollama's
  * Qwen 3.5 support has known rough edges, and llama-server is measurably faster
- * on the same GGUF. Flipping `runtime.adapter` in config.json is the whole
- * migration.
+ * on the same GGUF.
+ *
+ * Flipping `runtime.adapter` in config.json switches what answers, and that part
+ * really is one line. It is not the whole migration: RuntimeSupervisor only
+ * knows how to launch and preload Ollama, llama-server serves the single GGUF it
+ * was started with, and keep_alive has no meaning here. See the README section
+ * for what is lost. `/api/runtime` reports THIS adapter's health when it is the
+ * configured one, so the UI cannot claim Ollama is ready on its behalf.
  */
 
 import { sseData } from './stream-util.js';

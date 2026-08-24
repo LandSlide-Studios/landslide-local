@@ -1,4 +1,11 @@
 {
   "i0-review-findings.test.js": "449d54db379f5bd488ea7e8d75ff91cc38938cd0a38d9102032d976885b63317",
-  "i1-quality-of-life.test.js": "749221d469fd4477ff616d8883af9b19bfb746a6cf5d1c92ffa1980461d1e100"
+  "i1-quality-of-life.test.js": "749221d469fd4477ff616d8883af9b19bfb746a6cf5d1c92ffa1980461d1e100",
+  "i2-architecture.test.js": "fcf451d65a45401423118680d7fbce4f9bda3ac590b233a44fef53dfe7a6b918",
+  "i3-mcp.test.js": "4a5cf9ac9b8a171c37169e256c12ad623a6f319d08aa3c67e0c4265b2bed8aba",
+  "i4-security.test.js": "83cd4e817c42c7c82411f6a929596a656b90565fdbf33a03c73c136a99807cca",
+  "i5-performance.test.js": "10f984ecfb8f428d759e255c3c2c86ab7aad1762982d157928d33f3e6395d145",
+  "i6-reliability.test.js": "35e5151c2bc6c11c7136b60cc48c1c94988af940ad8e686979fc5bcdf0c99b85",
+  "i7-testing.test.js": "fc232d6a254f0c5323a73e93cb1caf1396789107c54ea9a7f7e3bd6a4287025c",
+  "i8-model-formatting.test.js": "57e2c52f917109afc027130d3ac307440504bfd6ff8030e6c2a09be313d828fd"
 }

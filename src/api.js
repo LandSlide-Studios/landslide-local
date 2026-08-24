@@ -33,13 +33,37 @@ export function createApi({ store, runtime, config, supervisor }) {
     ['POST', /^\/api\/chats\/([\w-]+)\/message$/, postMessage],
   ];
 
+  /**
+   * One answer to "is anything actually answering", shared by /api/runtime and
+   * /api/state so the two cannot disagree.
+   *
+   * The supervisor only ever talks to Ollama. Reporting its health while
+   * `runtime.adapter` is llamacpp is reporting a different process's state as
+   * this one's: the page warned correctly on load, then twelve seconds later
+   * announced "ollama ready" and hid the warning while nothing could answer.
+   */
+  async function runtimeView() {
+    const [health, sup] = await Promise.all([runtime.health(), boss.status()]);
+    const supervised = health.adapter === 'ollama';
+    return {
+      adapter: health.adapter,
+      running: health.ok,
+      version: health.ok ? (health.version ?? null) : null,
+      error: health.ok ? null : (health.error ?? 'not reachable'),
+      loaded: health.ok && supervised ? sup.loaded : [],
+      canStart: supervised && sup.canStart,
+      bin: supervised ? sup.bin : null,
+      starting: supervised ? sup.starting : false,
+    };
+  }
+
   async function runtimeStatus() {
-    return { runtime: await boss.status() };
+    return { runtime: await runtimeView() };
   }
 
   async function startRuntime() {
     const result = await boss.start();
-    return { result, runtime: await boss.status() };
+    return { result, runtime: await runtimeView() };
   }
 
   async function warmModel(_m, body) {
@@ -51,15 +75,15 @@ export function createApi({ store, runtime, config, supervisor }) {
   }
 
   async function getState() {
-    const [health, installed] = await Promise.all([runtime.health(), runtime.listModels()]);
+    const [view, installed] = await Promise.all([runtimeView(), runtime.listModels()]);
     const models = catalog.withAvailability(installed).map((m) => ({
       ...m,
       fit: catalog.fitFor(m, config.hardware.vramUsableGb),
     }));
     return {
       ok: true,
-      runtime: health,
-      supervisor: await boss.status(),
+      runtime: { ok: view.running, adapter: view.adapter, version: view.version, error: view.error },
+      supervisor: view,
       hardware: config.hardware,
       modelsDir: config.storage.modelsDir,
       chatsDir: config.storage.chatsDir,
@@ -120,9 +144,12 @@ export function createApi({ store, runtime, config, supervisor }) {
     let result;
     try {
       result = await runtime.chat({
-        model: body?.runtimeModelTag || model.id,
+        // The catalog id, always. A caller-supplied tag used to win here, which
+        // meant any model in the registry — a 37 GiB one on an 8 GB card — was
+        // one JSON field away.
+        model: model.id,
         messages: history,
-        options: { ...model.defaults, ...(body?.options ?? {}) },
+        options: catalog.optionsFor(model, body?.options),
         signal: controller.signal,
         onEvent: (e) => sse(e),
       });
