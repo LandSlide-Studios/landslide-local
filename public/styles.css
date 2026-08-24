@@ -135,6 +135,73 @@ button, input, textarea { font-family: inherit; font-size: inherit; color: inher
 .runtime-state.is-ok { color: #8FBF9F; }
 .runtime-state.is-bad { color: #E08A6E; }
 
+/* ---------- what is holding the card ---------- */
+
+.vram { display: flex; flex-direction: column; gap: 6px; }
+
+.vram-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 5px 8px;
+  background: rgba(237, 233, 225, 0.06);
+  border: 2px solid rgba(237, 233, 225, 0.28);
+  border-radius: var(--r);
+  color: rgba(237, 233, 225, 0.78);
+  font-size: 11px;
+  letter-spacing: 0.03em;
+  text-align: left;
+  cursor: pointer;
+}
+.vram-toggle:hover { border-color: rgba(237, 233, 225, 0.55); color: var(--cream); }
+.vram-toggle:focus-visible { outline: 2px solid var(--cream); outline-offset: 2px; }
+
+/* Drawn, not typed: Bebas Neue has no triangle glyph, and this label inherits
+   the body face anyway — one caret that cannot depend on either. */
+.vram-toggle::before {
+  content: '';
+  flex: none;
+  width: 0;
+  height: 0;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-left: 5px solid currentColor;
+  transition: transform 90ms steps(2);
+}
+.vram-toggle[aria-expanded='true']::before { transform: rotate(90deg); }
+
+.vram-list { display: flex; flex-direction: column; gap: 4px; }
+
+.vram-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border: 2px solid rgba(237, 233, 225, 0.18);
+  border-radius: var(--r);
+  font-size: 11px;
+  color: rgba(237, 233, 225, 0.72);
+}
+.vram-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vram-size { flex: none; font-variant-numeric: tabular-nums; color: rgba(237, 233, 225, 0.5); }
+
+.vram-unload {
+  flex: none;
+  font-family: var(--font-display);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  padding: 1px 7px;
+  background: transparent;
+  color: inherit;
+  border: 1.5px solid currentColor;
+  border-radius: var(--r);
+  cursor: pointer;
+}
+.vram-unload:hover:not(:disabled) { color: var(--cream); background: rgba(237, 233, 225, 0.14); }
+.vram-unload:disabled { opacity: 0.4; cursor: not-allowed; }
+
+
 .panel { display: flex; flex-direction: column; gap: 9px; min-height: 0; }
 .panel-grow { flex: 1; min-height: 0; }
 .panel-head { display: flex; align-items: center; justify-content: space-between; }

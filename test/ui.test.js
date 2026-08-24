@@ -34,6 +34,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
+import http from 'node:http';
 import { promises as fs } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createServer } from '../src/server.js';
@@ -460,14 +461,14 @@ let mountCount = 0;
  * script carries a real `<think>` block, so the reasoning path is exercised for
  * the same reason verify-live now names a thinking model.
  */
-async function mount({ script, delayMs = 0, chunkSize = 4 } = {}) {
+async function mount({ script, delayMs = 0, chunkSize = 4, runtime } = {}) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ls-ui-'));
   const { server, config } = await createServer({
     server: { port: 0 },
     // Never the configured chats dir: that one is the live install, shared by
     // every worktree of this repo.
     storage: { chatsDir: dir, logFile: '' },
-    runtime: { adapter: 'fake', delayMs, chunkSize, ...(script ? { script } : {}) },
+    runtime: runtime ?? { adapter: 'fake', delayMs, chunkSize, ...(script ? { script } : {}) },
   });
   await new Promise((r) => server.listen(0, config.server.host, r));
   const base = `http://127.0.0.1:${server.address().port}`;
@@ -1275,5 +1276,125 @@ test('two Branch activations in one tick make one fork, not two', async () => {
     assert.equal(chats.length, 2, `one source and one fork; got ${chats.map((c) => c.title).join(', ')}`);
   } finally {
     await page.close();
+  }
+});
+
+/* ------------------------------------------------------------------ */
+/* Resident VRAM, and getting it back                                  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * An Ollama that actually holds models.
+ *
+ * The `fake` adapter is not one the supervisor drives, so `/api/runtime` always
+ * reports an empty residency under it and the VRAM panel could never appear.
+ * Testing this needs a runtime that says something is loaded and lets go of it
+ * when asked — which is the whole feature.
+ */
+async function stubOllamaWithResidency(resident) {
+  const unloads = [];
+  const models = [...resident];
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => (body += c));
+    req.on('end', () => {
+      if (req.url === '/api/version') return res.writeHead(200).end(JSON.stringify({ version: 'stub' }));
+      if (req.url === '/api/tags') {
+        return res.writeHead(200).end(JSON.stringify({ models: [{ name: 'deckard-4b:latest' }] }));
+      }
+      if (req.url === '/api/ps') return res.writeHead(200).end(JSON.stringify({ models }));
+      if (req.url === '/api/generate') {
+        const parsed = body ? JSON.parse(body) : {};
+        // keep_alive 0 is the only thing Ollama treats as "evict it".
+        if (parsed.keep_alive === 0) {
+          unloads.push(parsed.model);
+          const at = models.findIndex((m) => m.name === parsed.model || m.name === `${parsed.model}:latest`);
+          if (at >= 0) models.splice(at, 1);
+        }
+        return res.writeHead(200).end(JSON.stringify({ done: true, done_reason: 'load' }));
+      }
+      res.writeHead(404).end('{}');
+    });
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  return {
+    url: `http://127.0.0.1:${server.address().port}`,
+    unloads,
+    models,
+    async close() {
+      server.closeAllConnections();
+      await new Promise((r) => server.close(r));
+    },
+  };
+}
+
+const resident = (name, bytes) => ({ name, size: bytes, expires_at: '2099-01-01T00:00:00Z' });
+
+test('the VRAM panel is absent until something is actually resident', async () => {
+  const stub = await stubOllamaWithResidency([]);
+  const page = await mount({ runtime: { adapter: 'ollama', ollamaUrl: stub.url } });
+  try {
+    assert.equal(
+      page.byId('vram').hidden,
+      true,
+      'an empty panel in a column that already overflows should cost no height at all',
+    );
+  } finally {
+    await page.close();
+    await stub.close();
+  }
+});
+
+test('the VRAM panel lists what is resident and gives it back on demand', async () => {
+  const stub = await stubOllamaWithResidency([
+    resident('deckard-4b:latest', 2.5 * 1024 ** 3),
+    resident('cold-fusion-9b:latest', 5 * 1024 ** 3),
+  ]);
+  const page = await mount({ runtime: { adapter: 'ollama', ollamaUrl: stub.url } });
+  try {
+    await waitFor('the panel to appear', () => page.byId('vram').hidden === false, 30_000);
+    assert.match(page.byId('vramSummary').textContent, /2 models in VRAM/);
+    assert.match(page.byId('vramSummary').textContent, /7\.50 GB/, 'the total is what the card is actually losing');
+
+    // Collapsed by default; the summary is the whole point at a glance.
+    assert.equal(page.byId('vramList').hidden, true);
+    assert.equal(page.byId('vramToggle').getAttribute('aria-expanded'), 'false');
+    dispatch(page.byId('vramToggle'), makeEvent('click'));
+    assert.equal(page.byId('vramList').hidden, false);
+    assert.equal(page.byId('vramToggle').getAttribute('aria-expanded'), 'true');
+
+    const rows = page.byId('vramList').querySelectorAll('.vram-row');
+    assert.equal(rows.length, 2);
+    assert.equal(rows[0].querySelector('.vram-name').textContent, 'Deckard', 'the catalog name, not the raw tag');
+
+    dispatch(rows[0].querySelector('.vram-unload'), makeEvent('click'));
+    await waitFor('the runtime to drop it', () => stub.unloads.length === 1, 30_000);
+    assert.equal(stub.unloads[0], 'deckard-4b', 'the catalog id is what the route accepts');
+
+    await waitFor('the panel to catch up', () => page.byId('vramList').querySelectorAll('.vram-row').length === 1, 30_000);
+    assert.match(page.byId('vramSummary').textContent, /1 model in VRAM/);
+  } finally {
+    await page.close();
+    await stub.close();
+  }
+});
+
+test('a resident model this build does not ship is shown but not offered for unload', async () => {
+  const stub = await stubOllamaWithResidency([resident('somebody-elses-model:latest', 3 * 1024 ** 3)]);
+  const page = await mount({ runtime: { adapter: 'ollama', ollamaUrl: stub.url } });
+  try {
+    await waitFor('the panel', () => page.byId('vram').hidden === false, 30_000);
+    dispatch(page.byId('vramToggle'), makeEvent('click'));
+    const row = page.byId('vramList').querySelector('.vram-row');
+    assert.equal(row.querySelector('.vram-name').textContent, 'somebody-elses-model:latest', 'shown honestly');
+    assert.equal(
+      row.querySelector('.vram-unload').disabled,
+      true,
+      'the unload route validates against the catalog, so offering this would be offering a 400',
+    );
+    assert.match(row.querySelector('.vram-unload').getAttribute('title') ?? '', /not one of this build/);
+  } finally {
+    await page.close();
+    await stub.close();
   }
 });

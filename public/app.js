@@ -31,6 +31,7 @@ import { branchFromMessage, newChat, regenerateReply, startNewChat } from './cha
 import { clearNotice, currentModel, els, mountDom, notify, state } from './dom.js';
 import { initAgainMenu } from './again-menu.js';
 import { initPreload } from './preload.js';
+import { initVram, renderVram } from './vram.js';
 import { buildMessage, updateChatActions } from './message-view.js';
 import {
   moveModelSelection,
@@ -99,6 +100,11 @@ async function loadState() {
   state.runtimeSig = runtimeSignature(view);
   renderRuntime(view);
   renderModels();
+  // Boot draws the same three things the poll redraws. Leaving this one out is
+  // not a missing frame: loadState also seeds runtimeSig, so the poll sees no
+  // change and never redraws either - the panel would stay hidden until
+  // residency happened to move, which is the one case where it matters least.
+  renderVram();
   renderFacts(data);
   els.storageHint.textContent = data.chatsDir;
   els.storageHint.title = data.chatsDir;
@@ -204,6 +210,7 @@ function wireEvents() {
   // rail. Handed in here rather than imported so preload.js never has to
   // import the rail it redraws.
   initPreload({ onSettled: refreshRuntime });
+  initVram({ onChanged: refreshRuntime });
 
   els.startRuntime.addEventListener('click', () => startRuntime());
   setInterval(() => {

@@ -56,6 +56,10 @@ export function mountDom() {
   contextMeter: $('contextMeter'),
   exportChat: $('exportChat'),
   regenerate: $('regenerate'),
+  vram: $('vram'),
+  vramToggle: $('vramToggle'),
+  vramSummary: $('vramSummary'),
+  vramList: $('vramList'),
   regenerateWith: $('regenerateWith'),
   regenerateMenu: $('regenerateMenu'),
   tpl: $('tpl-message'),
@@ -114,6 +118,17 @@ function busyBlocks(action) {
 
 const isResident = (id) => state.loaded.some((m) => m.name === id || m.name === `${id}:latest`);
 
+/**
+ * The catalog model a runtime residency entry refers to, or undefined.
+ *
+ * The inverse of isResident and deliberately the same rule: the runtime reports
+ * Ollama tags (`deckard-4b:latest`) and the catalog holds ids (`deckard-4b`).
+ * Anything resident that this build does not ship - a model pulled by hand, one
+ * retired from models.json - has no catalog entry, and saying so is what stops
+ * the page offering to unload something the API would refuse.
+ */
+const modelForTag = (tag) => state.models.find((m) => m.id === tag || `${m.id}:latest` === tag);
+
 const currentModel = () => state.models.find((m) => m.id === state.modelId);
 
 /** A model by id, whatever is selected right now. Used to label a reply with
@@ -157,4 +172,4 @@ function scrollToEnd() {
   });
 }
 
-export { NO_OUTPUT, busyBlocks, clearNotice, currentModel, dur, isResident, modelById, notify, scheduleThinkScroll, scrollToEnd, statLine };
+export { NO_OUTPUT, busyBlocks, clearNotice, currentModel, dur, isResident, modelById, modelForTag, notify, scheduleThinkScroll, scrollToEnd, statLine };

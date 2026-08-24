@@ -20,6 +20,17 @@
       </div>
     </header>
 
+    <!-- What is actually holding VRAM right now, and the only way to get it
+         back before KEEP_ALIVE expires. Hidden entirely when nothing is
+         resident, so it costs no height in the ordinary case - this column is
+         already the tallest thing in the app. -->
+    <div id="vram" class="vram" hidden>
+      <button id="vramToggle" class="vram-toggle" type="button" aria-expanded="false" aria-controls="vramList">
+        <span id="vramSummary"></span>
+      </button>
+      <div id="vramList" class="vram-list" hidden></div>
+    </div>
+
     <div id="runtimeBar" class="runtime-bar" hidden>
       <span id="runtimeMsg" class="runtime-msg"></span>
       <button id="startRuntime" class="btn btn-accent btn-sm" type="button">Start Ollama</button>

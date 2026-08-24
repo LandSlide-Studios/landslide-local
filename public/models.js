@@ -11,6 +11,7 @@
 
 import { apiFetch } from './api-client.js';
 import { forgetPreloads, notePreloaded, preloadModel } from './preload.js';
+import { renderVram } from './vram.js';
 import { clearNotice, els, isResident, notify, state } from './dom.js';
 import { loadChats } from './sidebar.js';
 
@@ -80,6 +81,7 @@ async function refreshRuntime() {
       state.runtimeSig = signature;
       renderRuntime(runtime);
       renderModels();
+      renderVram();
     } else {
       state.runtimeUp = runtime.running === true;
       state.loaded = runtime.loaded ?? [];
