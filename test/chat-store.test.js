@@ -117,6 +117,47 @@ for (const [label, make] of adapters) {
     await cleanup();
   });
 
+  test(`[${label}] a fork of a long-titled chat is still distinguishable from it`, async () => {
+    const { store, cleanup } = await make();
+    // At the title cap. Appending the marker and THEN capping cut the marker
+    // off instead of the title, and at exactly the cap the fork came out
+    // byte-identical to its source.
+    const long = 'T'.repeat(200);
+    const { id } = await store.create({ title: long });
+    await store.appendMessage(id, { role: 'user', content: 'q' });
+    const only = (await store.get(id)).messages[0].id;
+
+    const fork = await store.branch(id, only);
+    const source = await store.get(id);
+    assert.notEqual(fork.title, source.title, 'a fork you cannot tell from its source is not much of a fork');
+    assert.ok(fork.title.endsWith(' (branch)'), `marker survived the cap; got "${fork.title}"`);
+    assert.ok(fork.title.length <= 120, 'and the cap still holds');
+
+    // And forking the fork does not stack markers.
+    const twice = await store.branch(fork.id, fork.messages[0].id);
+    assert.equal(twice.title.match(/\(branch\)/g).length, 1);
+    await cleanup();
+  });
+
+  test(`[${label}] branch refuses a messageId that is not a string`, async () => {
+    const { store, cleanup } = await make();
+    const { id } = await store.create({ title: 'legacy shape' });
+    await store.appendMessage(id, { role: 'user', content: 'a turn' });
+
+    // `undefined === undefined` matched the first message of a chat written
+    // before messages carried ids, so branch(undefined) produced a fork instead
+    // of refusing. The store must not depend on one caller's guard.
+    for (const bad of [undefined, null, 42, '', {}]) {
+      await assert.rejects(
+        () => store.branch(id, bad),
+        (err) => err.code === 'ENOTFOUND_MESSAGE',
+        `branch(${JSON.stringify(bad) ?? 'undefined'}) must be refused`,
+      );
+    }
+    assert.equal((await store.list()).length, 1, 'and nothing may have been created');
+    await cleanup();
+  });
+
   test(`[${label}] branch refuses a message that is not in the chat`, async () => {
     const { store, cleanup } = await make();
     const { id } = await store.create({ title: 'x' });

@@ -226,3 +226,47 @@ test('the start event carries the id of the turn it just saved, so the page can 
   assert.equal(done.messageId, read.chat.messages[1].id, 'done names the reply');
   await h.close();
 });
+
+/**
+ * Concurrency on one chat. `state.busy` single-flights one page; it does not
+ * single-flight the server, and two tabs or any second loopback client are
+ * enough. Reading the id after a second lock acquisition handed every request
+ * the LAST arrival's turn, so the page stamped somebody else's message id onto
+ * the node it had just drawn — and branching there forked the wrong place with
+ * a perfectly ordinary 200.
+ */
+test('concurrent sends each get the id of their OWN turn on the start event', async () => {
+  const h = await harness();
+  // A model different from the chat's, so the updateChat re-read is in play.
+  const { body: made } = await json(h.base, 'POST', '/api/chats', { modelId: 'deckard-4b' });
+  const id = made.chat.id;
+
+  const contents = ['alpha', 'bravo', 'charlie', 'delta', 'echo', 'foxtrot'];
+  const startIds = await Promise.all(
+    contents.map(async (content) => {
+      const raw = await fetch(`${h.base}/api/chats/${id}/message`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ content, modelId: 'cold-fusion-9b' }),
+      }).then((r) => r.text());
+      const start = raw
+        .split('\n')
+        .filter((l) => l.startsWith('data: '))
+        .map((l) => JSON.parse(l.slice(6)))
+        .find((e) => e.type === 'start');
+      return [content, start.userMessageId];
+    }),
+  );
+
+  const { body: read } = await json(h.base, 'GET', `/api/chats/${id}`);
+  const byId = new Map(read.chat.messages.map((m) => [m.id, m.content]));
+  for (const [content, messageId] of startIds) {
+    assert.equal(
+      byId.get(messageId),
+      content,
+      `the start event for "${content}" named a message whose content is "${byId.get(messageId)}"`,
+    );
+  }
+  assert.equal(new Set(startIds.map(([, mid]) => mid)).size, contents.length, 'and no two shared an id');
+  await h.close();
+});

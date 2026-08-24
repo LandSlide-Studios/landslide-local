@@ -238,6 +238,10 @@ export function isWellFormed(chat) {
  * "no such message" from "no such chat".
  */
 export function applyBranch(chat, messageId, { title } = {}) {
+  // Without this, `undefined === undefined` matches the first message of a chat
+  // written before messages carried ids - a supported shape - and branch(undefined)
+  // quietly produces a one-message fork instead of refusing.
+  if (typeof messageId !== 'string' || !messageId) return null;
   const at = chat.messages.findIndex((m) => m.id === messageId);
   if (at < 0) return null;
   const ts = nowIso();
@@ -251,6 +255,9 @@ export function applyBranch(chat, messageId, { title } = {}) {
     options: chat.options ?? null,
     createdAt: ts,
     updatedAt: ts,
+    // Provenance. Nothing reads this yet - it is here so a fork can later be
+    // traced to its source without guessing from the title, and because the
+    // moment to record where a copy came from is the moment it is made.
     branchedFrom: { chatId: chat.id, messageId },
     messages: chat.messages.slice(0, at + 1).map((m) => ({
       id: newId(),
@@ -264,14 +271,22 @@ export function applyBranch(chat, messageId, { title } = {}) {
   };
 }
 
+const BRANCH_MARKER = ' (branch)';
+
 /**
- * Branches of branches stay one word long. Without the strip, three forks deep
- * reads "Why is X (branch) (branch) (branch)" and the cap then eats the part
- * that said what the chat was about.
+ * Branches of branches stay one word long: strip the marker before re-adding it,
+ * or three forks deep reads "Why is X (branch) (branch) (branch)".
+ *
+ * The base is capped with room for the marker RESERVED. Capping afterwards is
+ * what the first version did, and on a title at or near the 120-character limit
+ * the cap ate the marker instead of the title - at exactly 120 the fork came out
+ * byte-identical to its source, which is the one case where telling them apart
+ * matters most.
  */
 function branchTitle(title) {
-  const base = cleanTitle(String(title ?? '').replace(/ \(branch(?: \d+)?\)$/, '')) || 'New chat';
-  return cleanTitle(`${base} (branch)`);
+  const stripped = cleanTitle(String(title ?? '').replace(/ \(branch\)$/, ''));
+  const base = stripped.slice(0, MAX_TITLE - BRANCH_MARKER.length).trim() || 'New chat';
+  return `${base}${BRANCH_MARKER}`;
 }
 
 /** The message named is not in this chat. Distinct from the chat being absent. */

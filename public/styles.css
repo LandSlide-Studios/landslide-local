@@ -525,7 +525,6 @@ button, input, textarea { font-family: inherit; font-size: inherit; color: inher
 /* Never invisible while focused, whatever the pointer is doing. */
 .msg-branch:focus-visible { opacity: 1; outline: 2px solid var(--accent); outline-offset: 2px; }
 
-
 /* A model name we inferred rather than recorded. Dimmed and dotted so it does
    not sit in the same visual register as a name we actually know; the tooltip
    says which. */
@@ -897,7 +896,6 @@ kbd {
 .again-item-name { font-family: var(--font-display); font-size: 14px; letter-spacing: 0.06em; }
 .again-item-fit { font-size: 10.5px; letter-spacing: 0.04em; opacity: 0.85; }
 .again-item.is-current .again-item-fit { color: rgba(237, 233, 225, 0.55); }
-
 
 /* The Export control is an <a download> so the link works with no script at
    all; these two rules are the only thing that makes it read as a button. */

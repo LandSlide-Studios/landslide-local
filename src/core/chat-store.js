@@ -11,6 +11,7 @@
  *   list()                        -> Promise<ChatMeta[]>   newest first
  *   get(id)                       -> Promise<Chat | null>
  *   create({ title, modelId })    -> Promise<Chat>
+ *   branch(id, messageId)         -> Promise<Chat>         a copy up to one message
  *   appendMessage(id, message)    -> Promise<Chat>
  *   removeLastMessage(id)         -> Promise<Chat>         for regenerate
  *   updateChat(id, patch)         -> Promise<Chat>         title / modelId / systemPrompt / options

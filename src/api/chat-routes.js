@@ -119,12 +119,22 @@ export function createChatRoutes({ store, runtime }) {
     const model = requireModel(body?.modelId);
 
     let chat = await store.appendMessage(chatId, { role: 'user', content: text });
+    // Read off the APPEND result, before anything re-reads the chat.
+    //
+    // appendMessage returns the post-append record from inside the per-chat
+    // lock, so this is certainly the turn just written. `updateChat` below is a
+    // separate lock acquisition and therefore a fresh read: taking `.at(-1)`
+    // after it hands back whichever turn landed in the gap. With two tabs on one
+    // chat that is somebody else's message, and the page then stamps its id onto
+    // the node it just drew - so branching at your own question forks the chat
+    // somewhere else entirely, with a 200 and nothing to see.
+    const userMessageId = chat.messages.at(-1).id;
     if (chat.modelId !== model.id) chat = await store.updateChat(chatId, { modelId: model.id });
 
     // The page drew this turn optimistically and has no id for it. Without one
     // the freshly-sent question is the single message in the thread that cannot
     // be branched from until the chat is reopened.
-    return streamReply({ chatId, chat, model, body, res, userMessageId: chat.messages.at(-1).id });
+    return streamReply({ chatId, chat, model, body, res, userMessageId });
   }
 
   /**

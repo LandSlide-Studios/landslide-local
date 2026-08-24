@@ -141,10 +141,24 @@ async function regenerateReply(modelId = null) {
  * half-made branch or a damaged source. The new chat is opened straight away
  * because a branch nobody is looking at is just a duplicate in the sidebar.
  */
+let branching = false;
+
 async function branchFromMessage(messageId) {
+  // Claimed synchronously, before the first await, and for the same reason
+  // send() claims state.busy synchronously: two activations in one tick both
+  // pass every check and both fork. Measured at a 10ms gap it self-corrects,
+  // because by then openChat() has rebuilt the thread and detached the button -
+  // so the window is one round trip, which grows with the chat and grows again
+  // under the encrypted adapter's whole-file seal.
+  if (branching) return;
   if (busyBlocks('Branching')) return;
   if (!state.chatId || !messageId) return;
+  branching = true;
   try {
+    // The other two write paths flush the composer's system prompt first; a
+    // fork taken without it carries the last SAVED steering while the box on
+    // screen shows something else, and openChat then replaces what was typed.
+    await saveSystemPrompt();
     const res = await apiFetch(`/api/chats/${state.chatId}/branch`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -157,6 +171,8 @@ async function branchFromMessage(messageId) {
     await openChat(payload.chat.id);
   } catch (err) {
     notify(`Could not branch this chat: ${err.message ?? err}`);
+  } finally {
+    branching = false;
   }
 }
 

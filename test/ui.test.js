@@ -1253,3 +1253,27 @@ test('the Branch control is absent until the message it belongs to has been save
     await page.close();
   }
 });
+
+test('two Branch activations in one tick make one fork, not two', async () => {
+  const page = await mount({ script: SCRIPTED, delayMs: 4, chunkSize: 8 });
+  try {
+    const thread = page.byId('thread');
+    page.submit('a question');
+    await waitFor('the reply', () => finished(thread), 30_000);
+
+    // Same tick. This is the shape send() already guards against — Enter
+    // autorepeat, a double click, a trackpad that sends two — and the window is
+    // one server round trip, which grows with the chat and with encryption.
+    const button = thread.querySelectorAll('.msg')[0].querySelector('.msg-branch');
+    dispatch(button, makeEvent('click'));
+    dispatch(button, makeEvent('click'));
+
+    await waitFor('the fork to open', () => page.byId('chatList').querySelectorAll('.chat-row').length >= 2, 30_000);
+    await new Promise((r) => setTimeout(r, 300)); // let a second one land if it is going to
+
+    const { chats } = await (await fetch(`${page.base}/api/chats`)).json();
+    assert.equal(chats.length, 2, `one source and one fork; got ${chats.map((c) => c.title).join(', ')}`);
+  } finally {
+    await page.close();
+  }
+});
