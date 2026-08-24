@@ -147,3 +147,37 @@ second approval the loop is designed to stop at.
 | I7 | Testing gaps: headless browser-level UI test, long-stream soak test, verify-live exercises the thinking path on a slow model | done | loop/i7-testing | acceptance/i7 green: a UI test drives a real conversation and asserts DOM state without a human; a 20k-character reasoning stream renders without the main thread blocking over 100ms |
 
 Status: `todo` · `building` · `review` · `done` · `blocked`
+
+---
+
+# Phase 8 — Quality of life (Tommy's six, 2026-08-24)
+
+Six items chosen off the QOL assessment. Three of them are UI-only because the
+server work already exists and was never reachable from the page — that is
+stated per item rather than discovered halfway through.
+
+**Ordering is a dependency, not a preference.** Q3 lands before Q1: retrying
+with a different model is precisely the case where a per-message label has to be
+right, so the label must exist before the feature that stresses it.
+
+**Branches are sequential, not parallel.** Five of the six touch
+`public/app.js` and `public/styles.css`. Six branches off one base would be a
+six-way conflict for no isolation benefit, so each branch is cut from the
+previous one once its gate is green.
+
+**Nothing is pushed.** `master` is public now, so a push is a publish. That is
+Tommy's call, per change set.
+
+| # | Item | Status | Branch | Done when |
+|---|------|--------|--------|-----------|
+| Q3 | Per-message model label; close issue #1 | todo | - | a reply stores the model that produced it and still reads correctly after a reload; switching models mid-chat labels each reply with its own model; a message predating this shows the chat's model, visibly dimmed and marked as inferred |
+| Q1 | Retry with a different model | todo | - | choosing a model from the Again control regenerates with it; the chat's stored modelId follows; the rail's selection follows; the picker is keyboard reachable and inert while busy |
+| Q2 | Branch from message N | todo | - | branching at N yields a new chat of exactly N+1 identical messages carrying modelId/systemPrompt/options; the parent is byte-identical afterwards; unknown messageId is 400; the store contract suite passes against both implementations |
+| Q5 | Resident-VRAM panel with Unload | todo | - | resident models are listed with VRAM; Unload drops the count in `/api/ps`; a resident model absent from the catalog is shown but cannot be unloaded; the panel adds no sidebar height when nothing is resident, measured at a 900px viewport |
+| Q4 | Ctrl+1..5 selects a model | todo | - | the digit selects the model and Chrome does NOT switch tabs, verified by a real keypress; a digit past the model count does nothing; the hint is visible in the composer |
+| Q6 | Drop a text/code file on the composer | todo | - | a text file inserts as a fenced block carrying its filename; a binary file is refused with a readable reason and inserts nothing; an oversized file is refused with the size stated; dragging over the page never navigates it; verified by a real drop in Chrome, not a synthetic DataTransfer |
+
+Status: `todo` · `building` · `review` · `done` · `blocked`
+
+Gate per item: `npm run lock` · `npm test` · `npm run preflight`, plus the
+item's own "done when" checked by a review agent that did not write the code.
